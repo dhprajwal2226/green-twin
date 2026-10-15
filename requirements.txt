@@ -1,0 +1,13 @@
+# requirements.txt — Green Twin (api-cv branch)
+# Install with: pip install -r requirements.txt
+# Tested on Python 3.14 (system default) and Python 3.11 venv.
+# If ultralytics/torch fails on your Python version, create a 3.11 venv:
+#   py -3.11 -m venv venv311
+#   venv311\Scripts\activate
+#   pip install -r requirements.txt
+
+fastapi          # Web framework for the API (Phase 1)
+uvicorn          # ASGI server to run FastAPI
+requests         # HTTP client used by simulator.py and cv_counter.py
+opencv-python    # Camera capture and brightness detection (Phase 3)
+ultralytics      # YOLOv8n person detection (Phase 3)
