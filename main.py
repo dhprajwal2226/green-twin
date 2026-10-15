@@ -1,6 +1,6 @@
 # main.py
 # FastAPI server for the Green Building Digital Twin (api-cv branch)
-# Teammate B's file — DO NOT edit engine.py, only call it.
+# Teammate B's file — DO NOT edit engine.py, only call it as thin wrappers.
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -27,7 +27,7 @@ app.add_middleware(
 
 
 # -----------------------------------------------------------------------
-# Pydantic model: what a valid observation POST body looks like
+# Pydantic models: validation for POST bodies
 # -----------------------------------------------------------------------
 
 class Observation(BaseModel):
@@ -40,6 +40,16 @@ class Observation(BaseModel):
     person_count: int      # how many people were detected (0 or more)
     confidence: float      # model confidence 0-1
     light_on: bool         # True if camera sees the light on
+
+
+class ActionRequest(BaseModel):
+    """
+    Action taken on an issue, recorded into the evidence ledger.
+    FastAPI validates this automatically and gives a clean 422 on bad input.
+    """
+    room_id: str           # e.g. "R204"
+    action: str            # e.g. "switched_off"
+    ts: str                # ISO-8601 timestamp, e.g. "2026-10-15T12:30:00"
 
 
 # -----------------------------------------------------------------------
@@ -66,10 +76,7 @@ def require_valid_room(room_id: str):
 @app.post("/observation", summary="Submit one sensor reading")
 def post_observation(obs: Observation):
     """
-    Accept a JSON observation body, validate the room_id, then store it
-    in the engine's in-memory history.
-
-    Returns a simple confirmation dict so Teammate C can see it worked.
+    Thin wrapper: validates room_id, then stores the reading in engine history.
     """
     require_valid_room(obs.room_id)               # 400 if unknown
     engine.add_observation(obs.model_dump())       # store as plain dict
@@ -83,9 +90,7 @@ def post_observation(obs: Observation):
 @app.get("/twin", summary="Current state of every room")
 def get_twin(threshold: int = 15):
     """
-    Ask the engine for the current state of every room.
-    threshold = minutes of vacancy before we flag probable_waste.
-    Returns the list exactly as engine.twin() produces it — no reshaping.
+    Thin wrapper: returns current state of every room directly from engine.twin().
     """
     return engine.twin(threshold_min=threshold)
 
@@ -97,9 +102,7 @@ def get_twin(threshold: int = 15):
 @app.get("/recommendations", summary="Rooms with probable lighting waste, top priority first")
 def get_recommendations(threshold: int = 15):
     """
-    Returns only the probable_waste rooms, sorted highest priority first.
-    These are ESTIMATES under stated assumptions — not measured savings.
-    Passes engine output through unchanged.
+    Thin wrapper: returns engine.recommendations() for backwards compatibility.
     """
     return engine.recommendations(threshold_min=threshold)
 
@@ -108,59 +111,67 @@ def get_recommendations(threshold: int = 15):
 # Endpoint: GET /whatif
 # -----------------------------------------------------------------------
 
-# NOTE: engine.py does not expose a whatif() function.
-# We implement it here without touching engine.py.
-# Logic: compare total estimated kWh across all rooms at different
-# "act after N minutes" thresholds to show how policy aggressiveness
-# changes savings estimates.
-
 @app.get("/whatif", summary="What-if policy comparison (savings ESTIMATES only)")
 def get_whatif():
     """
-    Show how total estimated avoidable kWh changes if we respond to vacant
-    rooms after 5, 15, 30, or 60 minutes.
-
-    These are ESTIMATES under stated assumptions, not measured savings.
+    Thin wrapper: returns policy comparison across thresholds from engine.whatif().
     """
-    thresholds = (5, 15, 30, 60)
-    results = []
+    return engine.whatif()
 
-    for t in thresholds:
-        # Get all room states at this threshold
-        states = engine.twin(threshold_min=t)
 
-        # Add up kwh_high from every probable_waste room.
-        # kwh_low/high are only present on probable_waste rooms.
-        total_kwh_low = sum(
-            s.get("kwh_low", 0) for s in states if s["status"] == "probable_waste"
-        )
-        total_kwh_high = sum(
-            s.get("kwh_high", 0) for s in states if s["status"] == "probable_waste"
-        )
+# -----------------------------------------------------------------------
+# Endpoint: GET /queue (engine v2)
+# -----------------------------------------------------------------------
 
-        results.append({
-            "threshold_min": t,
-            "probable_waste_rooms": [
-                s["room_id"] for s in states if s["status"] == "probable_waste"
-            ],
-            "total_kwh_low_estimate": round(total_kwh_low, 3),
-            "total_kwh_high_estimate": round(total_kwh_high, 3),
-            "note": "ESTIMATE under stated assumptions, not a measured saving",
-        })
+@app.get("/queue", summary="Ranked issue queue for prioritized actions")
+def get_queue(threshold: int = 15):
+    """
+    Thin wrapper: returns the engine's ranked issue list with rank, score, why, and effort.
+    """
+    return engine.queue(threshold_min=threshold)
 
-    return results
+
+# -----------------------------------------------------------------------
+# Endpoint: POST /ledger/action (engine v2)
+# -----------------------------------------------------------------------
+
+@app.post("/ledger/action", summary="Record a response action in the evidence ledger")
+def post_ledger_action(act: ActionRequest):
+    """
+    Thin wrapper: validates room_id against ROOMS, calls engine.record_action(),
+    and returns the updated ledger entry. Returns HTTP 400 if room is unknown or no open issue.
+    """
+    require_valid_room(act.room_id)
+    try:
+        return engine.record_action(act.room_id, act.action, act.ts)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# -----------------------------------------------------------------------
+# Endpoint: GET /ledger (engine v2)
+# -----------------------------------------------------------------------
+
+@app.get("/ledger", summary="All evidence ledger entries")
+def get_ledger(threshold: int = 15):
+    """
+    Thin wrapper: returns all ledger entries directly from engine.get_ledger().
+    """
+    return engine.get_ledger(threshold_min=threshold)
 
 
 # -----------------------------------------------------------------------
 # Endpoint: POST /reset
 # -----------------------------------------------------------------------
 
-@app.post("/reset", summary="Clear all stored observations (use before each demo run)")
+@app.post("/reset", summary="Clear all stored observations and the ledger")
 def post_reset():
     """
-    Wipe every room's history so we can run the simulator fresh.
-    Clears engine.observations[room_id] for every known room.
+    Thin wrapper: calls engine.reset() to wipe observation history and the ledger.
     """
-    for room_id in engine.observations:
-        engine.observations[room_id].clear()   # clear the list in-place
-    return {"reset": True, "rooms_cleared": list(engine.observations.keys())}
+    engine.reset()
+    return {
+        "reset": True,
+        "rooms_cleared": list(engine.ROOMS.keys()),
+        "ledger_cleared": True,
+    }
