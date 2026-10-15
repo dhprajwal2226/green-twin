@@ -6,6 +6,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import engine  # our team-lead's module
+from explain import router as explain_router  # ADDED: GenAI explanation endpoint
 
 # -----------------------------------------------------------------------
 # App setup
@@ -24,6 +25,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(explain_router)  # ADDED: registers GET /explain/{room_id}
 
 
 # -----------------------------------------------------------------------

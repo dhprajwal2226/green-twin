@@ -132,10 +132,11 @@ def build_template_explanation(room: Dict[str, Any]) -> str:
         return f"{sentence_1} {sentence_2} {sentence_3} {sentence_4}"
 
     elif status == "needs_verification":
-        sentence_1 = f"In {name} ({room_id}), sensor telemetry reported conflicting or incomplete occupancy evidence ({evidence_str})."
-        sentence_2 = "Confidence cannot be definitively established due to partial or ambiguous sensor inputs."
-        sentence_3 = f"The baseline avoidable energy estimate is {est_str} under nominal idle load assumptions, not a verified meter reading."
-        sentence_4 = "A physical walk-through is recommended to inspect actual room occupancy and check sensor placement."
+        # The engine makes NO energy claim for this status, so we must not print a number.
+        sentence_1 = f"In {name} ({room_id}), the system cannot trust the occupancy data yet ({evidence_str})."
+        sentence_2 = "Because of this, it makes no claim about whether the room is empty or whether energy is being wasted."
+        sentence_3 = "No energy estimate is calculated for this room until readings are trusted."
+        sentence_4 = "A physical walk-through is recommended to check actual room occupancy and the sensor placement."
         return f"{sentence_1} {sentence_2} {sentence_3} {sentence_4}"
 
     elif status == "booking_unused":
@@ -189,7 +190,9 @@ def call_gemini_api(room: Dict[str, Any], api_key: str, model_name: str) -> str:
         "explain in 3 to 4 plain sentences what was observed, how confident the system "
         "is, the estimated avoidable energy (state it is an estimate under assumptions, "
         "not a measurement), and one suggested next step such as verifying on site. Do "
-        "not invent any numbers, rooms or facts not in the JSON.\n\n"
+        "not invent any numbers, rooms or facts not in the JSON. "
+        "If the status is needs_verification, the system makes no energy estimate: say "
+        "that readings are not trusted yet and do not state any kWh figure.\n\n"
         f"{json.dumps(room, indent=2)}"
     )
 

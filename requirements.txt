@@ -11,3 +11,5 @@ uvicorn          # ASGI server to run FastAPI
 requests         # HTTP client used by simulator.py and cv_counter.py
 opencv-python    # Camera capture and brightness detection (Phase 3)
 ultralytics      # YOLOv8n person detection (Phase 3)
+python-dotenv    # Loads GEMINI_API_KEY from .env (explain.py)
+google-genai     # Gemini SDK, only used if a key is set (explain.py)
