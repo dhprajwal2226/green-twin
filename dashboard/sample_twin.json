@@ -1,0 +1,80 @@
+[
+  {
+    "room_id": "R204",
+    "name": "Lab 204",
+    "status": "probable_waste",
+    "vacant_min": 25,
+    "confidence": 0.9,
+    "evidence": [
+      "no person for 25 min",
+      "light on"
+    ],
+    "kwh_low": 0.036,
+    "kwh_high": 0.06,
+    "cost_inr": 0.48,
+    "co2_kg": 0.042,
+    "priority": 0.054
+  },
+  {
+    "room_id": "R205",
+    "name": "Class 205",
+    "status": "needs_verification",
+    "evidence": [
+      "sensor discordance",
+      "inconclusive PIR count",
+      "light circuit draw detected"
+    ],
+    "priority": 0.032,
+    "kwh": 0.045
+  },
+  {
+    "room_id": "R206",
+    "name": "Hall 206",
+    "status": "reserved_vacant",
+    "vacant_min": 10,
+    "confidence": 0.95,
+    "evidence": [
+      "calendar reserved 11:00-12:00",
+      "no occupancy detected",
+      "fixtures in standby"
+    ],
+    "kwh_low": 0.0,
+    "kwh_high": 0.0,
+    "cost_inr": 0.0,
+    "co2_kg": 0.0,
+    "priority": 0.0
+  },
+  {
+    "room_id": "R207",
+    "name": "Seminar 207",
+    "status": "booking_unused",
+    "vacant_min": 8,
+    "confidence": 0.85,
+    "evidence": [
+      "no person for 8 min",
+      "threshold 15 min not met",
+      "lighting fixture engaged"
+    ],
+    "kwh_low": 0.0,
+    "kwh_high": 0.0,
+    "cost_inr": 0.0,
+    "co2_kg": 0.0,
+    "priority": 0.012
+  },
+  {
+    "room_id": "R208",
+    "name": "Office 208",
+    "status": "ok",
+    "vacant_min": 0,
+    "confidence": 0.98,
+    "evidence": [
+      "2 persons detected",
+      "natural lighting harvesting active"
+    ],
+    "kwh_low": 0.0,
+    "kwh_high": 0.0,
+    "cost_inr": 0.0,
+    "co2_kg": 0.0,
+    "priority": 0.0
+  }
+]
