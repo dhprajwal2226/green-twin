@@ -1,13 +1,20 @@
 from datetime import datetime
 
-# ---- ASSUMPTIONS: placeholders, replace with cited values before presenting ----
-TARIFF_INR_PER_KWH = 8.0     # illustrative, NOT a real tariff
-EMISSION_KG_PER_KWH = 0.7    # illustrative, check the official grid factor
-POWER_LOW = 0.6              # real draw may be 60% of rated power...
-POWER_HIGH = 1.0             # ...up to 100%, so we give a range
-CONF_MIN = 0.6               # readings below this confidence are not trusted
-MIN_OBS = 3                  # need at least this many readings to judge a room
-# --------------------------------------------------------------------------------
+# ---- ASSUMPTIONS ----
+# TARIFF: PLACEHOLDER. Replace with the energy charge (Rs/unit) from the college's
+# electricity bill or the KERC tariff order for the correct category.
+TARIFF_INR_PER_KWH = 8.0
+# CO2: CEA CO2 Baseline Database v21.0, all-India weighted average, FY 2024-25
+# = 0.710 tCO2/MWh = 0.710 kg CO2/kWh.
+# https://cea.nic.in/wp-content/uploads/baseline/2025/12/User_Guide_V_21.0.pdf
+EMISSION_KG_PER_KWH = 0.710
+POWER_LOW = 0.6                # real draw may be 60% of rated power...
+POWER_HIGH = 1.0               # ...up to 100%, so we give a range
+CONF_MIN = 0.6                 # readings below this confidence are not trusted
+MIN_OBS = 3                    # need at least this many readings to judge a room
+INCIDENTS_PER_DAY = 3          # ASSUMPTION: how often a flagged room repeats this per day
+WORKING_DAYS_PER_MONTH = 26    # ASSUMPTION: days per month the pattern applies
+# ---------------------
 
 # The "building": rated light power (watts) and booked hours (start, end) per room
 ROOMS = {
@@ -113,6 +120,24 @@ def whatif(thresholds=(5, 15, 30, 60)):
     return results
 
 
+def monthly_projection(threshold_min=15):
+    """Scale the current probable-waste findings to a month.
+    ILLUSTRATIVE: assumes today's pattern repeats. Not a forecast, not a measurement."""
+    flagged = [s for s in twin(threshold_min) if s["status"] == "probable_waste"]
+    factor = INCIDENTS_PER_DAY * WORKING_DAYS_PER_MONTH
+    return {
+        "threshold_min": threshold_min,
+        "rooms_flagged": len(flagged),
+        "incidents_per_day": INCIDENTS_PER_DAY,
+        "working_days": WORKING_DAYS_PER_MONTH,
+        "kwh_low": round(sum(r["kwh_low"] for r in flagged) * factor, 3),
+        "kwh_high": round(sum(r["kwh_high"] for r in flagged) * factor, 3),
+        "cost_inr": round(sum(r["cost_inr"] for r in flagged) * factor, 2),
+        "co2_kg": round(sum(r["co2_kg"] for r in flagged) * factor, 3),
+        "note": "Illustrative projection under stated assumptions, not measured savings.",
+    }
+
+
 # ------------------------------ tests ------------------------------
 def feed(room_id, hour, minutes, count, conf, light):
     for m in minutes:
@@ -143,8 +168,17 @@ if __name__ == "__main__":
     assert w[1]["kwh_high"] == 0.06      # 15 min: 10 min x 0.36 kW
     assert w[2]["rooms_flagged"] == 0    # 30 min: room only vacant 25 min
 
+    # 5. Monthly projection: 0.06 kWh x 3 incidents x 26 days = 4.68 kWh
+    m = monthly_projection()
+    assert m["kwh_high"] == 4.68
+    assert m["kwh_low"] == 2.808
+
+    # 6. CO2 uses the CEA factor: 0.06 kWh x 0.710 = 0.0426 kg -> 0.043
+    assert room_state("R204")["co2_kg"] == 0.043
+
     print(room_state("R204"))
     print("Recommendations:", [r["room_id"] for r in recommendations()])
     for row in whatif():
         print(row)
+    print(monthly_projection())
     print("all tests passed")
