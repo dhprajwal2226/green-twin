@@ -73,6 +73,11 @@ def parse_args():
         default="http://localhost:8000",
         help="Base URL of the Green Twin API server"
     )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Print detailed numbers (raw/smoothed count, conf, brightness, light_on, HTTP status) each cycle."
+    )
     return parser.parse_args()
 
 
@@ -83,7 +88,7 @@ def parse_args():
 def estimate_light_on(frame, threshold):
     """
     Convert the frame to greyscale, compute the mean pixel value,
-    and return True if it exceeds the threshold.
+    and return (light_on, mean_brightness).
 
     IMPORTANT: This is only a VISUAL PROXY for the light being on.
     It is NOT an electrical measurement. A bright window, a projector,
@@ -91,8 +96,8 @@ def estimate_light_on(frame, threshold):
     The threshold should be tuned for the specific room's baseline.
     """
     grey = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    mean_brightness = grey.mean()
-    return mean_brightness > threshold
+    mean_brightness = float(grey.mean())
+    return mean_brightness > threshold, mean_brightness
 
 
 # -----------------------------------------------------------------------
@@ -143,11 +148,12 @@ def detect_persons(model, frame):
 # Post one observation to the API
 # -----------------------------------------------------------------------
 
-def post_observation(api_url, room_id, person_count, confidence, light_on):
+def post_observation(api_url, room_id, person_count, confidence, light_on, verbose=False, raw_count=None, brightness=None):
     """
     Build an observation dict and POST it to /observation.
     We only send numbers and a timestamp -- no image data.
     Logs an error if the POST fails but does NOT crash the capture loop.
+    Returns HTTP status code (or None if failed).
     """
     obs = {
         "room_id": room_id,
@@ -156,17 +162,28 @@ def post_observation(api_url, room_id, person_count, confidence, light_on):
         "confidence": round(confidence, 3),
         "light_on": light_on,
     }
+    status_code = None
     try:
         r = requests.post(f"{api_url}/observation", json=obs, timeout=3)
+        status_code = r.status_code
         r.raise_for_status()
-        print(f"[SENT] {obs['ts']}  room={room_id}  persons={person_count}"
-              f"  conf={obs['confidence']}  light={light_on}")
+        if verbose:
+            print(f"[VERBOSE] raw={raw_count} smoothed={person_count} conf={obs['confidence']:.3f} "
+                  f"brightness={brightness:.1f} light_on={light_on} http={status_code}")
+        else:
+            print(f"[SENT] {obs['ts']}  room={room_id}  persons={person_count}"
+                  f"  conf={obs['confidence']}  light={light_on}")
     except requests.exceptions.ConnectionError:
         print("[WARN] API server unreachable. Will retry next cycle.")
     except requests.exceptions.HTTPError as e:
-        print(f"[WARN] API returned {e.response.status_code}: {e.response.text}")
+        status_code = e.response.status_code
+        if verbose:
+            print(f"[VERBOSE] raw={raw_count} smoothed={person_count} conf={obs['confidence']:.3f} "
+                  f"brightness={brightness:.1f} light_on={light_on} http={status_code}")
+        print(f"[WARN] API returned {status_code}: {e.response.text}")
     except Exception as e:
         print(f"[WARN] Unexpected error posting observation: {e}")
+    return status_code
 
 
 # -----------------------------------------------------------------------
@@ -232,7 +249,7 @@ def run(args):
 
                 # 3. Estimate whether the light is on from frame brightness.
                 #    This is a visual proxy only (see function docstring).
-                light_on = estimate_light_on(frame, args.brightness_threshold)
+                light_on, mean_brightness = estimate_light_on(frame, args.brightness_threshold)
 
                 # 4. POST the observation. Only numbers go over the network.
                 post_observation(
@@ -241,6 +258,9 @@ def run(args):
                     person_count=smoothed_count,
                     confidence=mean_conf,
                     light_on=light_on,
+                    verbose=args.verbose,
+                    raw_count=raw_count,
+                    brightness=mean_brightness,
                 )
 
                 last_send_time = now
