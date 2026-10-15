@@ -97,6 +97,22 @@ def recommendations(threshold_min=15):
     return sorted(flagged, key=lambda s: s["priority"], reverse=True)
 
 
+def whatif(thresholds=(5, 15, 30, 60)):
+    """Compare policies: switch lights off after N minutes of vacancy."""
+    results = []
+    for t in thresholds:
+        flagged = [s for s in twin(t) if s["status"] == "probable_waste"]
+        results.append({
+            "threshold_min": t,
+            "rooms_flagged": len(flagged),
+            "kwh_low": round(sum(r["kwh_low"] for r in flagged), 3),
+            "kwh_high": round(sum(r["kwh_high"] for r in flagged), 3),
+            "cost_inr": round(sum(r["cost_inr"] for r in flagged), 2),
+            "co2_kg": round(sum(r["co2_kg"] for r in flagged), 3),
+        })
+    return results
+
+
 # ------------------------------ tests ------------------------------
 def feed(room_id, hour, minutes, count, conf, light):
     for m in minutes:
@@ -121,7 +137,14 @@ if __name__ == "__main__":
     feed("R206", 14, [10, 20, 30], 0, 0.9, True)
     assert room_state("R206")["status"] == "reserved_vacant"
 
+    # 4. What-if: shorter threshold -> more avoidable energy
+    w = whatif()
+    assert w[0]["kwh_high"] == 0.12      # 5 min:  20 min x 0.36 kW
+    assert w[1]["kwh_high"] == 0.06      # 15 min: 10 min x 0.36 kW
+    assert w[2]["rooms_flagged"] == 0    # 30 min: room only vacant 25 min
+
     print(room_state("R204"))
     print("Recommendations:", [r["room_id"] for r in recommendations()])
+    for row in whatif():
+        print(row)
     print("all tests passed")
-    
