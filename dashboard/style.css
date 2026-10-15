@@ -416,6 +416,168 @@ body {
   gap: 0.5rem;
 }
 
+.section-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.view-toggle-group {
+  display: inline-flex;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  padding: 2px;
+  gap: 2px;
+}
+
+.view-toggle-btn {
+  background: transparent;
+  border: none;
+  font-size: 0.775rem;
+  font-weight: 600;
+  padding: 0.35rem 0.65rem;
+  border-radius: 4px;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  transition: all 0.15s ease;
+}
+
+.view-toggle-btn:hover {
+  color: var(--text-main);
+}
+
+.view-toggle-btn.active {
+  background: var(--bg-card);
+  color: var(--primary);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+
+/* 3D Digital Twin Viewport Container */
+.floor-3d-container {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  background: #0b1120;
+  border-radius: var(--radius-md);
+  padding: 0.85rem;
+  color: #f8fafc;
+  border: 1px solid #1e293b;
+  position: relative;
+  overflow: hidden;
+  box-shadow: inset 0 2px 4px rgba(0,0,0,0.3);
+}
+
+.floor-3d-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  z-index: 10;
+}
+
+.floor-3d-hint {
+  font-size: 0.75rem;
+  color: #94a3b8;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.floor-3d-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.floor-3d-action-btn {
+  background: rgba(30, 41, 59, 0.8);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: #e2e8f0;
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.3rem 0.65rem;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  backdrop-filter: blur(4px);
+}
+
+.floor-3d-action-btn:hover {
+  background: rgba(51, 65, 85, 0.9);
+  color: #ffffff;
+  border-color: rgba(255, 255, 255, 0.3);
+}
+
+.floor-3d-action-btn.highlight {
+  background: rgba(239, 68, 68, 0.25);
+  border-color: rgba(239, 68, 68, 0.6);
+  color: #fca5a5;
+}
+
+.floor-3d-action-btn.highlight:hover {
+  background: rgba(239, 68, 68, 0.45);
+  color: #ffffff;
+}
+
+.three-canvas-wrapper {
+  width: 100%;
+  height: 380px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  position: relative;
+  cursor: grab;
+  background: radial-gradient(circle at center, #1e293b 0%, #090d16 100%);
+}
+
+.three-canvas-wrapper:active {
+  cursor: grabbing;
+}
+
+.three-canvas-wrapper canvas {
+  width: 100% !important;
+  height: 100% !important;
+  display: block;
+}
+
+.floor-3d-legend {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 0.85rem;
+  padding-top: 0.35rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.legend-chip {
+  font-size: 0.725rem;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: #cbd5e1;
+}
+
+.legend-chip .chip-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.legend-chip.red .chip-dot { background: #ef4444; box-shadow: 0 0 6px #ef4444; }
+.legend-chip.grey .chip-dot { background: #94a3b8; }
+.legend-chip.blue .chip-dot { background: #38bdf8; box-shadow: 0 0 6px #38bdf8; }
+.legend-chip.amber .chip-dot { background: #f59e0b; box-shadow: 0 0 6px #f59e0b; }
+.legend-chip.green .chip-dot { background: #22c55e; box-shadow: 0 0 6px #22c55e; }
+  gap: 0.5rem;
+}
+
 .section-meta {
   font-size: 0.8rem;
   color: var(--text-muted);
@@ -931,17 +1093,4 @@ body {
 .footer-privacy-note {
   font-weight: 600;
   color: var(--text-main);
-}
-/* Booking unused (purple) */
-.room-card.status-booking_unused {
-  border-color: #a78bfa;
-  background: #f5f3ff;
-}
-.room-card.status-booking_unused .status-pill {
-  background: #ede9fe;
-  color: #6d28d9;
-  border-color: #c4b5fd;
-}
-.room-card.status-booking_unused .status-dot {
-  background: #6d28d9;
 }

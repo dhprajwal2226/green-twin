@@ -10,7 +10,7 @@
 
 // Switch between sample data and live backend API.
 // Set to false for live integration with Teammate B's API at http://localhost:8000
-const USE_SAMPLE = true;
+const USE_SAMPLE = false;
 
 // Backend API Base URL
 const API_BASE = "http://localhost:8000";
@@ -107,6 +107,7 @@ const state = {
   isApiReachable: true,
   pollTimer: null,
   isExplaining: false,
+  viewMode: "2d", // "2d" or "3d"
 };
 
 // ============================================================================
@@ -122,6 +123,15 @@ const dom = {
   toggleModeBtn: document.getElementById("toggleModeBtn"),
   apiUnreachableBanner: document.getElementById("apiUnreachableBanner"),
   retryApiBtn: document.getElementById("retryApiBtn"),
+
+  // View Mode & 3D Twin Elements
+  view2dBtn: document.getElementById("view2dBtn"),
+  view3dBtn: document.getElementById("view3dBtn"),
+  floor3dContainer: document.getElementById("floor3dContainer"),
+  threeCanvasWrapper: document.getElementById("threeCanvasWrapper"),
+  btnIsoView: document.getElementById("btnIsoView"),
+  btnTopView: document.getElementById("btnTopView"),
+  btnFocusWaste: document.getElementById("btnFocusWaste"),
 
   // KPIs
   kpiTotalRooms: document.getElementById("kpiTotalRooms"),
@@ -226,8 +236,6 @@ function formatStatusLabel(status) {
     case "reserved_vacant":
     case "reserved":
       return "Reserved";
-    case "booking_unused":
-      return "Booked, Unused";  
     case "watching":
       return "Watching";
     case "ok":
@@ -259,13 +267,7 @@ function generateLocalTemplateExplanation(room) {
   const vacant_min = room.vacant_min;
   const conf_str = formatConfidence(room.confidence);
   const energy_range = formatEnergyRange(room);
-    if (status === "booking_unused") {
-    return {
-      room_id,
-      explanation: `In ${name} (${room_id}), a booking exists but no occupancy was detected (evidence: ${evidence}). The estimated avoidable energy is ${energy_range}, which is an estimate under stated assumptions, not a measurement. Suggested next step: verify on site whether the booking was actually used before switching anything off.`,
-      source: "template"
-    };
-  }
+
   if (status === "probable_waste") {
     const vStr = vacant_min !== undefined ? `approximately ${vacant_min} minutes` : "an extended duration";
     return {
@@ -412,6 +414,7 @@ function renderDashboard() {
   renderRecommendations();
   renderWhatIfTable();
   updateEvidencePanelIfSelected();
+  update3DDigitalTwin();
 
   const now = new Date();
   dom.gridLastUpdated.textContent = `Updated ${now.toLocaleTimeString()}`;
@@ -540,6 +543,9 @@ function selectRoom(roomId) {
 
   // Populate evidence panel
   populateEvidencePanel(roomId);
+
+  // Update 3D selection highlight
+  update3DSelection(roomId);
 
   // Smooth scroll evidence panel into view on mobile
   if (window.innerWidth <= 1024) {
@@ -837,6 +843,524 @@ function escapeHtml(str) {
 }
 
 // ============================================================================
+// 3D DIGITAL TWIN MODULE (Three.js Architectural Floor Plan)
+// ============================================================================
+
+const threeTwin = {
+  initialized: false,
+  scene: null,
+  camera: null,
+  renderer: null,
+  controls: null,
+  raycaster: null,
+  mouse: null,
+  roomObjects: {},      // roomId -> { group, floorMesh, light, diffuser, beacon, sprite, canvas, ctx, texture }
+  clickableMeshes: [],  // array of room hit meshes for raycasting
+  selectionBox: null,   // active selection box/ring
+  animFrameId: null,
+};
+
+const ROOM_3D_LAYOUT = {
+  R204: { x: -6.0, z: -4.5, w: 5.6, d: 5.0, h: 2.2, name: "Lab 204" },
+  R205: { x: 0.0,  z: -4.5, w: 5.6, d: 5.0, h: 2.2, name: "Class 205" },
+  R206: { x: 6.0,  z: -4.5, w: 5.6, d: 5.0, h: 2.2, name: "Hall 206" },
+  R207: { x: -3.5, z: 4.5,  w: 7.2, d: 5.0, h: 2.2, name: "Seminar 207" },
+  R208: { x: 4.5,  z: 4.5,  w: 7.2, d: 5.0, h: 2.2, name: "Office 208" },
+};
+
+const STATUS_3D_CONFIG = {
+  probable_waste:    { hex: 0xef4444, css: "#ef4444", intensity: 2.4, label: "PROBABLE WASTE" },
+  needs_verification:{ hex: 0x94a3b8, css: "#94a3b8", intensity: 0.8, label: "NEEDS VERIFY" },
+  reserved_vacant:   { hex: 0x38bdf8, css: "#38bdf8", intensity: 1.2, label: "RESERVED" },
+  reserved:          { hex: 0x38bdf8, css: "#38bdf8", intensity: 1.2, label: "RESERVED" },
+  watching:          { hex: 0xf59e0b, css: "#f59e0b", intensity: 1.4, label: "WATCHING" },
+  ok:                { hex: 0x22c55e, css: "#22c55e", intensity: 1.0, label: "NORMAL OK" },
+  unknown:           { hex: 0x64748b, css: "#64748b", intensity: 0.8, label: "MONITORED" },
+};
+
+function getStatus3dConfig(status) {
+  if (!status) return STATUS_3D_CONFIG.unknown;
+  const s = status.toLowerCase();
+  return STATUS_3D_CONFIG[s] || STATUS_3D_CONFIG.unknown;
+}
+
+function init3DScene() {
+  if (threeTwin.initialized) return;
+
+  if (typeof THREE === "undefined") {
+    if (dom.threeCanvasWrapper) {
+      dom.threeCanvasWrapper.innerHTML = `
+        <div class="empty-state" style="padding-top: 110px;">
+          <div class="empty-icon">🌐</div>
+          <div class="empty-text">3D WebGL library is loading or network is offline.</div>
+          <div style="font-size: 0.8rem; color: #94a3b8; margin-top: 0.5rem;">
+            You can continue using the 2D Cards view smoothly.
+          </div>
+        </div>
+      `;
+    }
+    return;
+  }
+
+  const wrapper = dom.threeCanvasWrapper;
+  if (!wrapper) return;
+
+  const width = wrapper.clientWidth || 600;
+  const height = wrapper.clientHeight || 380;
+
+  // 1. Scene
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x090d16);
+  scene.fog = new THREE.FogExp2(0x090d16, 0.015);
+  threeTwin.scene = scene;
+
+  // 2. Camera
+  const camera = new THREE.PerspectiveCamera(40, width / height, 0.1, 1000);
+  camera.position.set(16, 18, 22);
+  threeTwin.camera = camera;
+
+  // 3. Renderer
+  const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+  renderer.setSize(width, height);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.outputEncoding = THREE.sRGBEncoding;
+  wrapper.innerHTML = "";
+  wrapper.appendChild(renderer.domElement);
+  threeTwin.renderer = renderer;
+
+  // 4. Orbit Controls (if available from CDN)
+  if (typeof THREE.OrbitControls !== "undefined") {
+    const controls = new THREE.OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.06;
+    controls.maxPolarAngle = Math.PI / 2 - 0.05;
+    controls.minDistance = 8;
+    controls.maxDistance = 50;
+    controls.target.set(0, 0, 0);
+    threeTwin.controls = controls;
+  }
+
+  // 5. Environmental Lighting
+  const ambientLight = new THREE.AmbientLight(0xffffff, 0.65);
+  scene.add(ambientLight);
+
+  const dirLight = new THREE.DirectionalLight(0xffffff, 0.55);
+  dirLight.position.set(20, 30, 15);
+  dirLight.castShadow = true;
+  dirLight.shadow.mapSize.width = 1024;
+  dirLight.shadow.mapSize.height = 1024;
+  scene.add(dirLight);
+
+  // 6. Base Building Floor Slab
+  buildArchitecturalBase(scene);
+
+  // 7. Rooms & Lighting Fixtures
+  buildRooms(scene);
+
+  // 8. Selection Box Indicator
+  const selGeo = new THREE.RingGeometry(1.6, 1.85, 32);
+  selGeo.rotateX(-Math.PI / 2);
+  const selMat = new THREE.MeshBasicMaterial({ color: 0x0f766e, side: THREE.DoubleSide });
+  const selectionMesh = new THREE.Mesh(selGeo, selMat);
+  selectionMesh.position.set(0, 0.04, 0);
+  selectionMesh.visible = false;
+  scene.add(selectionMesh);
+  threeTwin.selectionBox = selectionMesh;
+
+  // 9. Raycasting Setup
+  threeTwin.raycaster = new THREE.Raycaster();
+  threeTwin.mouse = new THREE.Vector2();
+
+  renderer.domElement.addEventListener("click", onThreeCanvasClick);
+  renderer.domElement.addEventListener("mousemove", onThreeCanvasMouseMove);
+  window.addEventListener("resize", onThreeWindowResize);
+
+  threeTwin.initialized = true;
+
+  // 10. Start Animation Loop
+  animate3DScene();
+
+  // Initial Sync
+  update3DDigitalTwin();
+  if (state.selectedRoomId) {
+    update3DSelection(state.selectedRoomId);
+  }
+}
+
+function buildArchitecturalBase(scene) {
+  // Main foundation slab
+  const slabGeo = new THREE.BoxGeometry(24, 0.4, 18);
+  const slabMat = new THREE.MeshStandardMaterial({
+    color: 0x111827,
+    roughness: 0.85,
+    metalness: 0.1,
+  });
+  const slab = new THREE.Mesh(slabGeo, slabMat);
+  slab.position.y = -0.2;
+  slab.receiveShadow = true;
+  scene.add(slab);
+
+  // Subtle floor grid helper
+  const grid = new THREE.GridHelper(24, 24, 0x1e293b, 0x1e293b);
+  grid.position.y = 0.02;
+  scene.add(grid);
+
+  // Central corridor accent path
+  const corridorGeo = new THREE.PlaneGeometry(22, 2.6);
+  corridorGeo.rotateX(-Math.PI / 2);
+  const corridorMat = new THREE.MeshStandardMaterial({
+    color: 0x1e293b,
+    roughness: 0.9,
+  });
+  const corridor = new THREE.Mesh(corridorGeo, corridorMat);
+  corridor.position.set(0, 0.025, 0);
+  scene.add(corridor);
+}
+
+function buildRooms(scene) {
+  threeTwin.roomObjects = {};
+  threeTwin.clickableMeshes = [];
+
+  const wallMat = new THREE.MeshStandardMaterial({
+    color: 0x334155,
+    transparent: true,
+    opacity: 0.55,
+    roughness: 0.4,
+    metalness: 0.2,
+  });
+
+  for (const [roomId, layout] of Object.entries(ROOM_3D_LAYOUT)) {
+    const group = new THREE.Group();
+    group.position.set(layout.x, 0, layout.z);
+    group.userData = { roomId };
+
+    // 1. Room Floor Tile
+    const floorGeo = new THREE.PlaneGeometry(layout.w, layout.d);
+    floorGeo.rotateX(-Math.PI / 2);
+    const floorMat = new THREE.MeshStandardMaterial({
+      color: 0x1e293b,
+      roughness: 0.7,
+      metalness: 0.15,
+    });
+    const floorMesh = new THREE.Mesh(floorGeo, floorMat);
+    floorMesh.position.y = 0.03;
+    floorMesh.receiveShadow = true;
+    floorMesh.userData = { roomId };
+    group.add(floorMesh);
+    threeTwin.clickableMeshes.push(floorMesh);
+
+    // 2. Architectural Cutaway Walls
+    const w = layout.w;
+    const d = layout.d;
+    const h = layout.h;
+    const t = 0.12;
+
+    // Back wall
+    const backWall = new THREE.Mesh(new THREE.BoxGeometry(w, h, t), wallMat);
+    backWall.position.set(0, h / 2, -d / 2);
+    group.add(backWall);
+
+    // Left wall
+    const leftWall = new THREE.Mesh(new THREE.BoxGeometry(t, h, d), wallMat);
+    leftWall.position.set(-w / 2, h / 2, 0);
+    group.add(leftWall);
+
+    // Right wall
+    const rightWall = new THREE.Mesh(new THREE.BoxGeometry(t, h, d), wallMat);
+    rightWall.position.set(w / 2, h / 2, 0);
+    group.add(rightWall);
+
+    // Low front divider (cutaway so interior is visible)
+    const frontWall = new THREE.Mesh(new THREE.BoxGeometry(w * 0.4, 0.6, t), wallMat);
+    frontWall.position.set(-w * 0.28, 0.3, d / 2);
+    group.add(frontWall);
+
+    // 3. Hanging Pendant Lighting Fixture
+    const cordGeo = new THREE.CylinderGeometry(0.025, 0.025, 0.9, 8);
+    const cordMat = new THREE.MeshStandardMaterial({ color: 0x64748b, metalness: 0.8 });
+    const cord = new THREE.Mesh(cordGeo, cordMat);
+    cord.position.set(0, h - 0.45, 0);
+    group.add(cord);
+
+    const fixtureGeo = new THREE.BoxGeometry(1.6, 0.12, 0.45);
+    const fixtureMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.5, metalness: 0.7 });
+    const fixture = new THREE.Mesh(fixtureGeo, fixtureMat);
+    fixture.position.set(0, h - 0.9, 0);
+    group.add(fixture);
+
+    // Diffuser LED panel (colored glow)
+    const diffuserGeo = new THREE.BoxGeometry(1.5, 0.06, 0.38);
+    const diffuserMat = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      emissive: 0xef4444,
+      emissiveIntensity: 1.5,
+      roughness: 0.2,
+    });
+    const diffuser = new THREE.Mesh(diffuserGeo, diffuserMat);
+    diffuser.position.set(0, h - 0.96, 0);
+    group.add(diffuser);
+
+    // PointLight casting light onto room
+    const pointLight = new THREE.PointLight(0xef4444, 1.8, 9, 2);
+    pointLight.position.set(0, h - 1.05, 0);
+    group.add(pointLight);
+
+    // 4. Waste Pulsing Beacon Ring
+    const beaconGeo = new THREE.TorusGeometry(1.1, 0.05, 8, 32);
+    beaconGeo.rotateX(Math.PI / 2);
+    const beaconMat = new THREE.MeshBasicMaterial({
+      color: 0xef4444,
+      transparent: true,
+      opacity: 0.85,
+    });
+    const beacon = new THREE.Mesh(beaconGeo, beaconMat);
+    beacon.position.set(0, 0.1, 0);
+    beacon.visible = false;
+    group.add(beacon);
+
+    // 5. Dynamic 3D Text Sprite Label
+    const spriteObj = createRoomCanvasSprite(layout.name, "MONITORED", "#64748b");
+    spriteObj.sprite.position.set(0, h + 1.2, 0);
+    group.add(spriteObj.sprite);
+
+    scene.add(group);
+
+    threeTwin.roomObjects[roomId] = {
+      group,
+      floorMesh,
+      light: pointLight,
+      diffuser,
+      beacon,
+      sprite: spriteObj.sprite,
+      canvas: spriteObj.canvas,
+      ctx: spriteObj.ctx,
+      texture: spriteObj.texture,
+      layout,
+    };
+  }
+}
+
+function createRoomCanvasSprite(roomName, statusText, statusColorCss) {
+  const canvas = document.createElement("canvas");
+  canvas.width = 256;
+  canvas.height = 128;
+  const ctx = canvas.getContext("2d");
+
+  renderSpriteCanvas(ctx, canvas, roomName, statusText, statusColorCss);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.minFilter = THREE.LinearFilter;
+  const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false });
+  const sprite = new THREE.Sprite(material);
+  sprite.scale.set(3.6, 1.8, 1);
+
+  return { sprite, canvas, ctx, texture };
+}
+
+function renderSpriteCanvas(ctx, canvas, roomName, statusText, statusColorCss) {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // Background rounded rectangle
+  ctx.fillStyle = "rgba(11, 17, 32, 0.88)";
+  ctx.strokeStyle = statusColorCss;
+  ctx.lineWidth = 4;
+
+  const x = 8, y = 8, w = 240, h = 112, r = 16;
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  // Room Name
+  ctx.fillStyle = "#ffffff";
+  ctx.font = "bold 26px -apple-system, sans-serif";
+  ctx.textAlign = "center";
+  ctx.fillText(roomName, 128, 48);
+
+  // Status Badge Text
+  ctx.fillStyle = statusColorCss;
+  ctx.font = "bold 18px -apple-system, sans-serif";
+  ctx.fillText(statusText, 128, 88);
+}
+
+function update3DDigitalTwin() {
+  if (!threeTwin.initialized) return;
+
+  const rooms = state.rooms || [];
+  rooms.forEach(room => {
+    const obj = threeTwin.roomObjects[room.room_id];
+    if (!obj) return;
+
+    const conf = getStatus3dConfig(room.status);
+
+    // 1. Update point light & diffuser emissive
+    obj.light.color.setHex(conf.hex);
+    obj.light.intensity = conf.intensity;
+    obj.diffuser.material.emissive.setHex(conf.hex);
+    obj.diffuser.material.emissiveIntensity = conf.intensity;
+
+    // 2. Floor tint
+    obj.floorMesh.material.color.setHex(conf.hex).lerp(new THREE.Color(0x111827), 0.7);
+
+    // 3. Waste beacon visibility & color
+    if (room.status === "probable_waste") {
+      obj.beacon.visible = true;
+      obj.beacon.material.color.setHex(conf.hex);
+    } else {
+      obj.beacon.visible = false;
+    }
+
+    // 4. Update floating Sprite text
+    const labelStatus = conf.label;
+    renderSpriteCanvas(obj.ctx, obj.canvas, room.name || obj.layout.name, labelStatus, conf.css);
+    obj.texture.needsUpdate = true;
+  });
+
+  // Ensure current selection stays in sync
+  if (state.selectedRoomId) {
+    update3DSelection(state.selectedRoomId);
+  }
+}
+
+function update3DSelection(roomId) {
+  if (!threeTwin.initialized || !threeTwin.selectionBox) return;
+
+  const obj = threeTwin.roomObjects[roomId];
+  if (!obj) {
+    threeTwin.selectionBox.visible = false;
+    return;
+  }
+
+  threeTwin.selectionBox.visible = true;
+  threeTwin.selectionBox.position.set(obj.layout.x, 0.05, obj.layout.z);
+}
+
+function onThreeCanvasClick(event) {
+  if (!threeTwin.renderer || !threeTwin.camera) return;
+
+  const rect = dom.threeCanvasWrapper.getBoundingClientRect();
+  const mouse = new THREE.Vector2(
+    ((event.clientX - rect.left) / rect.width) * 2 - 1,
+    -((event.clientY - rect.top) / rect.height) * 2 + 1
+  );
+
+  threeTwin.raycaster.setFromCamera(mouse, threeTwin.camera);
+  const intersects = threeTwin.raycaster.intersectObjects(threeTwin.clickableMeshes, true);
+
+  if (intersects.length > 0) {
+    const hitObj = intersects[0].object;
+    const hitRoomId = hitObj.userData ? hitObj.userData.roomId : null;
+    if (hitRoomId) {
+      selectRoom(hitRoomId);
+    }
+  }
+}
+
+function onThreeCanvasMouseMove(event) {
+  if (!threeTwin.renderer || !threeTwin.camera || !dom.threeCanvasWrapper) return;
+
+  const rect = dom.threeCanvasWrapper.getBoundingClientRect();
+  const mouse = new THREE.Vector2(
+    ((event.clientX - rect.left) / rect.width) * 2 - 1,
+    -((event.clientY - rect.top) / rect.height) * 2 + 1
+  );
+
+  threeTwin.raycaster.setFromCamera(mouse, threeTwin.camera);
+  const intersects = threeTwin.raycaster.intersectObjects(threeTwin.clickableMeshes, true);
+
+  if (intersects.length > 0) {
+    dom.threeCanvasWrapper.style.cursor = "pointer";
+  } else {
+    dom.threeCanvasWrapper.style.cursor = "grab";
+  }
+}
+
+function onThreeWindowResize() {
+  if (!threeTwin.renderer || !threeTwin.camera || !dom.threeCanvasWrapper) return;
+  const width = dom.threeCanvasWrapper.clientWidth;
+  const height = dom.threeCanvasWrapper.clientHeight || 380;
+  if (width === 0 || height === 0) return;
+
+  threeTwin.camera.aspect = width / height;
+  threeTwin.camera.updateProjectionMatrix();
+  threeTwin.renderer.setSize(width, height);
+}
+
+function set3DView(type) {
+  if (!threeTwin.camera || !threeTwin.controls) return;
+
+  if (type === "iso") {
+    threeTwin.camera.position.set(16, 18, 22);
+    threeTwin.controls.target.set(0, 0, 0);
+  } else if (type === "top") {
+    threeTwin.camera.position.set(0, 28, 0.01);
+    threeTwin.controls.target.set(0, 0, 0);
+  } else if (type === "waste") {
+    // Zoom toward Lab 204
+    threeTwin.camera.position.set(-6.0, 8.5, 6.0);
+    threeTwin.controls.target.set(-6.0, 1.0, -4.5);
+    selectRoom("R204");
+  }
+  threeTwin.controls.update();
+}
+
+function switchViewMode(mode) {
+  state.viewMode = mode;
+  if (mode === "3d") {
+    dom.view2dBtn.classList.remove("active");
+    dom.view3dBtn.classList.add("active");
+    dom.floorGrid.style.display = "none";
+    dom.floor3dContainer.style.display = "flex";
+
+    if (!threeTwin.initialized) {
+      init3DScene();
+    } else {
+      setTimeout(onThreeWindowResize, 50);
+    }
+    update3DDigitalTwin();
+  } else {
+    dom.view3dBtn.classList.remove("active");
+    dom.view2dBtn.classList.add("active");
+    dom.floor3dContainer.style.display = "none";
+    dom.floorGrid.style.display = "grid";
+  }
+}
+
+function animate3DScene() {
+  threeTwin.animFrameId = requestAnimationFrame(animate3DScene);
+
+  if (threeTwin.controls) {
+    threeTwin.controls.update();
+  }
+
+  // Animate waste pulsing beacons
+  const time = Date.now() * 0.003;
+  for (const rid in threeTwin.roomObjects) {
+    const obj = threeTwin.roomObjects[rid];
+    if (obj.beacon && obj.beacon.visible) {
+      const pulse = 1.0 + 0.15 * Math.sin(time * 3);
+      obj.beacon.scale.set(pulse, pulse, pulse);
+      obj.beacon.rotation.z += 0.015;
+    }
+  }
+
+  if (threeTwin.renderer && threeTwin.scene && threeTwin.camera) {
+    threeTwin.renderer.render(threeTwin.scene, threeTwin.camera);
+  }
+}
+
+// ============================================================================
 // INITIALIZATION
 // ============================================================================
 
@@ -868,6 +1392,15 @@ function setupEventListeners() {
   dom.retryApiBtn.addEventListener("click", () => {
     syncDashboardData();
   });
+
+  // 3D View Toggles
+  if (dom.view2dBtn) dom.view2dBtn.addEventListener("click", () => switchViewMode("2d"));
+  if (dom.view3dBtn) dom.view3dBtn.addEventListener("click", () => switchViewMode("3d"));
+
+  // 3D Camera Controls
+  if (dom.btnIsoView) dom.btnIsoView.addEventListener("click", () => set3DView("iso"));
+  if (dom.btnTopView) dom.btnTopView.addEventListener("click", () => set3DView("top"));
+  if (dom.btnFocusWaste) dom.btnFocusWaste.addEventListener("click", () => set3DView("waste"));
 }
 
 function startPolling() {
@@ -887,150 +1420,4 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
   startPolling();
-});
-// ---------- v2: ranked queue ----------
-
-// Makes text safe to put inside HTML
-function esc(v) {
-  const d = document.createElement("div");
-  d.textContent = v ?? "";
-  return d.innerHTML;
-}
-
-// Gets data from the sample file or from the live API
-async function getData(apiPath, samplePath) {
-  const url = USE_SAMPLE ? samplePath : `${API_BASE}${apiPath}`;
-  const res = await fetch(url);
-  if (!res.ok) throw new Error("HTTP " + res.status);
-  return res.json();
-}
-
-// Shows the queue in the box
-// Shows the queue in the box, each item with a "Log this action" button
-async function loadQueue(threshold) {
-  const box = document.getElementById("queue-list");
-  if (!box) return;
-  try {
-    const items = await getData(`/queue?threshold=${threshold}`, "sample_queue.json");
-    if (items.length === 0) {
-      box.innerHTML = "<p>No issues in the queue right now.</p>";
-      return;
-    }
-    box.innerHTML = items.map(q => `
-      <div>
-        <strong>#${esc(q.rank)} ${esc(q.name)} (${esc(q.room_id)})</strong>
-        <div>Suggested action: ${esc(q.action)}</div>
-        <div>Evidence: ${esc(q.evidence_status)}</div>
-        <div>Estimated avoidable: ${esc(q.est_kwh_low)} to ${esc(q.est_kwh_high)} kWh</div>
-        <button class="queue-btn" data-room="${esc(q.room_id)}" data-action="${esc(q.action)}">
-          Log this action
-        </button>
-      </div><hr>`).join("");
-  } catch (err) {
-    box.innerHTML = "<p>Queue unavailable.</p>";
-  }
-}
-
-// Run it once when the page opens
-loadQueue(15);
-// ---------- v2: ledger ----------
-
-// Shows the ledger in the box
-async function loadLedger() {
-  const box = document.getElementById("ledger-list");
-  if (!box) return;
-  try {
-        let entries = await getData("/ledger", "sample_ledger.json");
-        if (USE_SAMPLE) entries = entries.concat(window.extraLedger || []);
-    if (entries.length === 0) {
-      box.innerHTML = "<p>No actions logged yet.</p>";
-      return;
-    }
-    box.innerHTML = entries.map(e => `
-      <div>
-        <strong>${esc(e.room_id)}: ${esc(e.action)}</strong>
-        <div>Evidence: ${esc(e.evidence_status)}</div>
-        <div>Estimated avoidable: ${esc(e.est_kwh_low)} to ${esc(e.est_kwh_high)} kWh</div>
-        <div>Savings verified: ${e.savings_verified === true ? "Yes" : "No"}</div>
-        <div><strong>Evidence missing:</strong>
-          ${(e.evidence_missing || []).length === 0
-            ? "none listed"
-            : (e.evidence_missing || []).map(m => esc(m)).join(", ")}
-        </div>
-      </div><hr>`).join("");
-  } catch (err) {
-    box.innerHTML = "<p>Ledger unavailable.</p>";
-  }
-}
-
-// Run it once when the page opens
-loadLedger();
-// ---------- v2: queue follows the threshold ----------
-
-// When the slider moves, reload the queue with the new minutes
-document.getElementById("thresholdSlider").addEventListener("input", (e) => {
-  loadQueue(e.target.value);
-});
-
-// When a preset button (5m, 10m, 15m...) is clicked, do the same
-document.querySelectorAll(".preset-btn[data-threshold]").forEach((btn) => {
-  btn.addEventListener("click", () => {
-    loadQueue(btn.dataset.threshold);
-  });
-});
-// ---------- v2: log an action ----------
-
-// Shows a message above the queue
-function showActionMsg(text, isError) {
-  const el = document.getElementById("actionMsg");
-  el.textContent = text;
-  el.style.color = isError ? "#b91c1c" : "#166534";
-}
-
-// Sends the action to the API (or fakes it in sample mode)
-async function logAction(roomId, action) {
-  try {
-    if (USE_SAMPLE) {
-      // Sample mode: remember the entry in the browser only
-      window.extraLedger = window.extraLedger || [];
-      window.extraLedger.push({
-        id: 100 + window.extraLedger.length,
-        room_id: roomId,
-        status: "open",
-        evidence_status: "unverified",
-        action: action,
-        response: "",
-        est_kwh_low: 0,
-        est_kwh_high: 0,
-        savings_verified: false,
-        evidence_missing: ["engine v2 not connected (sample mode)"]
-      });
-      showActionMsg("Logged (sample mode).", false);
-    } else {
-      const res = await fetch(`${API_BASE}/ledger/action`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ room_id: roomId, action: action, ts: new Date().toISOString() })
-      });
-      if (res.status === 400) {
-        // The engine refused: unknown room or no open issue
-        const body = await res.json().catch(() => ({}));
-        showActionMsg(body.detail || "Cannot log: unknown room or no open issue.", true);
-        return;
-      }
-      if (!res.ok) throw new Error("HTTP " + res.status);
-      showActionMsg("Action logged.", false);
-    }
-  } catch (err) {
-    showActionMsg("Could not log the action. Is the API running?", true);
-    return;
-  }
-  loadLedger();   // refresh the ledger box
-}
-
-// One listener for all "Log this action" buttons
-document.getElementById("queue-list").addEventListener("click", (e) => {
-  const btn = e.target.closest(".queue-btn");
-  if (!btn) return;
-  logAction(btn.dataset.room, btn.dataset.action);
 });

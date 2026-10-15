@@ -5,6 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Green Building Digital Twin | DSU Code Clash 2.0 Track 4</title>
   <link rel="stylesheet" href="style.css">
+  <!-- Three.js & OrbitControls for 3D Digital Twin (No build step required) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 </head>
 <body>
 
@@ -107,17 +110,44 @@
     <!-- Left Column: Floor Grid + What-If Table -->
     <div class="left-column">
       
-      <!-- Floor Grid Section -->
+      <!-- Floor Grid & 3D Digital Twin Section -->
       <section class="section-card">
         <div class="section-header">
-          <h2 class="section-title">
-            <span>🏢</span> Room Occupancy Floor Grid
-          </h2>
+          <div class="section-title-wrap">
+            <h2 class="section-title">
+              <span>🏢</span> Room Occupancy Floor View
+            </h2>
+            <div class="view-toggle-group">
+              <button id="view2dBtn" class="view-toggle-btn active" title="Show 2D Card Grid">🏢 2D Cards</button>
+              <button id="view3dBtn" class="view-toggle-btn" title="Show Interactive 3D Digital Twin">🌐 3D Twin</button>
+            </div>
+          </div>
           <span id="gridLastUpdated" class="section-meta">Auto-refreshing every 2s</span>
         </div>
 
+        <!-- 2D Floor Grid -->
         <div id="floorGrid" class="floor-grid">
           <!-- Room cards populated dynamically by app.js -->
+        </div>
+
+        <!-- 3D Digital Twin Viewport Container -->
+        <div id="floor3dContainer" class="floor-3d-container" style="display: none;">
+          <div class="floor-3d-toolbar">
+            <span class="floor-3d-hint">🖱️ Left click + drag to rotate • Scroll to zoom • Click any room to inspect</span>
+            <div class="floor-3d-actions">
+              <button id="btnIsoView" class="floor-3d-action-btn">Isometric</button>
+              <button id="btnTopView" class="floor-3d-action-btn">Top-Down</button>
+              <button id="btnFocusWaste" class="floor-3d-action-btn highlight">Focus Waste</button>
+            </div>
+          </div>
+          <div id="threeCanvasWrapper" class="three-canvas-wrapper"></div>
+          <div class="floor-3d-legend">
+            <span class="legend-chip red"><span class="chip-dot"></span> Probable Waste</span>
+            <span class="legend-chip grey"><span class="chip-dot"></span> Needs Verification</span>
+            <span class="legend-chip blue"><span class="chip-dot"></span> Reserved</span>
+            <span class="legend-chip amber"><span class="chip-dot"></span> Watching</span>
+            <span class="legend-chip green"><span class="chip-dot"></span> Normal OK</span>
+          </div>
         </div>
       </section>
 
@@ -146,23 +176,6 @@
             </tbody>
           </table>
         </div>
-      </section>
-      <section class="section-card">
-        <div class="section-header">
-          <h2 class="section-title"><span>📋</span> Ranked Action Queue</h2>
-        </div>
-                <div id="actionMsg" style="min-height: 1.2em; margin-bottom: 8px;"></div>
-        
-        
-        <div id="queue-list"></div>
-      </section>
-
-      <!-- v2: Action Ledger -->
-      <section class="section-card">
-        <div class="section-header">
-          <h2 class="section-title"><span>🧾</span> Action Ledger</h2>
-        </div>
-        <div id="ledger-list"></div>
       </section>
 
     </div>
@@ -251,7 +264,6 @@
           </h2>
           <span class="section-meta">Probable waste rooms, highest priority first</span>
         </div>
-        
 
         <div id="recommendationsList" class="recommendations-list">
           <!-- Recommendations or empty state populated dynamically -->
