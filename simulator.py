@@ -206,6 +206,28 @@ def scenario_e():
     print()
 
 
+def scenario_f():
+    """
+    Scenario F - Observed response in the evidence ledger
+    -----------------------------------------------------
+    Why 12:35 is used:
+      - The response action for R204 ('switched_off') was recorded at 12:30.
+      - 12:35 is strictly later than the action timestamp (12:35 > 12:30) on the same date.
+      - A sensor reading showing person_count=0, confidence=0.9 (>= CONF_MIN of 0.6),
+        and light_on=False provides trusted visual evidence that the lights were turned off.
+
+    Why savings_verified stays False:
+      - Seeing the light turned off confirms a behavioral response was observed,
+        moving evidence_status to 'observed'.
+      - However, without physical electrical sub-meters measuring real power draw
+        and providing a metered before/after baseline, all energy and cost savings
+        remain ESTIMATES under stated assumptions. They are never verified savings.
+    """
+    print("Scenario F: R204 at 12:35 - trusted reading with light off, expect response_observed")
+    post_obs("R204", "2026-10-15T12:35:00", 0, 0.9, False)
+    print()
+
+
 # -----------------------------------------------------------------------
 # Main: run all scenarios, verify /twin, /queue, /ledger, and actions
 # -----------------------------------------------------------------------
@@ -281,9 +303,55 @@ if __name__ == "__main__":
         print(f"[FAIL] Error testing action error paths: {e}")
         all_ok = False
 
-    # 8. Verify /ledger shows entries with status and evidence_missing
+    # 8. Scenario F: Run trusted reading showing light off after the action
+    scenario_f()
+
+    # 9. Verify /ledger shows entries with updated response_observed status
     ledger_entries = print_ledger()
     print(f"\n[OK] Ledger returned {len(ledger_entries)} entries")
+
+    # Robust lookup for R204 entry (expected id "L1")
+    r204_entry = None
+    for entry in ledger_entries:
+        if entry.get("room_id") == "R204":
+            r204_entry = entry
+            break
+
+    scenario_f_ok = True
+    f_failures = []
+
+    if r204_entry is None:
+        scenario_f_ok = False
+        f_failures.append("No ledger entry found for room R204")
+    else:
+        actual_id = r204_entry.get("id")
+        if actual_id != "L1":
+            print(f"[INFO] Note: R204 entry ID is '{actual_id}' (expected 'L1')")
+        else:
+            print(f"[OK] Found R204 ledger entry with expected id '{actual_id}'")
+
+        # Check 1: status == "response_observed"
+        if r204_entry.get("status") != "response_observed":
+            scenario_f_ok = False
+            f_failures.append(f"status '{r204_entry.get('status')}' != 'response_observed'")
+
+        # Check 2: evidence_status == "observed"
+        if r204_entry.get("evidence_status") != "observed":
+            scenario_f_ok = False
+            f_failures.append(f"evidence_status '{r204_entry.get('evidence_status')}' != 'observed'")
+
+        # Check 3: savings_verified == False (must stay false, never true)
+        if r204_entry.get("savings_verified") is not False:
+            scenario_f_ok = False
+            f_failures.append(f"savings_verified '{r204_entry.get('savings_verified')}' is not False")
+
+    if scenario_f_ok:
+        print(f"\nSCENARIO F: PASS (entry {r204_entry.get('id')}: status={r204_entry.get('status')}, "
+              f"evidence_status={r204_entry.get('evidence_status')}, savings_verified={r204_entry.get('savings_verified')})")
+    else:
+        print(f"\nSCENARIO F: FAIL - Failed checks: {', '.join(f_failures)}")
+        print("Actual ledger entry:", json.dumps(r204_entry, indent=2))
+        all_ok = False
 
     print()
     if all_ok:
