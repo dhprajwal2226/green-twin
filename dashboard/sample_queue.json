@@ -1,0 +1,16 @@
+[
+  {
+    "rank": 1,
+    "room_id": "R204",
+    "name": "Lab 204",
+    "status": "probable_waste",
+    "action": "Switch off lights",
+    "score": 0.054,
+    "why": ["no person for 25 min", "light on"],
+    "effort": "low",
+    "evidence_status": "estimated",
+    "est_kwh_low": 0.036,
+    "est_kwh_high": 0.060,
+    "ledger_id": null
+  }
+]

@@ -1,0 +1,14 @@
+[
+  {
+    "id": 1,
+    "room_id": "R204",
+    "status": "open",
+    "evidence_status": "estimated",
+    "action": "Switch off lights",
+    "response": "Lights switched off by facility staff",
+    "est_kwh_low": 0.036,
+    "est_kwh_high": 0.060,
+    "savings_verified": false,
+    "evidence_missing": ["post-action meter reading", "confirmation lights were on"]
+  }
+]

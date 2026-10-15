@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Green Building Digital Twin | DSU Code Clash 2.0 Track 4</title>
+  <link rel="stylesheet" href="style.css">
+  <!-- Three.js & OrbitControls for 3D Digital Twin (No build step required) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+</head>
+<body>
+
+  <!-- Top App Header -->
+  <header class="top-header">
+    <div class="brand-section">
+      <div class="brand-icon">🌱</div>
+      <div class="brand-title">
+        <h1>Digital Twin: Lighting Waste Intelligence</h1>
+      </div>
+      <span class="brand-badge">DSU Code Clash 2.0 • Track 4</span>
+    </div>
+
+    <div class="header-status-group">
+      <div id="connectionStatus" class="connection-indicator connected">
+        <span class="pulse-dot"></span>
+        <span id="connectionText">Checking Connection...</span>
+      </div>
+      <button id="toggleModeBtn" class="toggle-mode-btn" title="Toggle between live backend and local sample data">
+        Switch to Sample Mode
+      </button>
+    </div>
+  </header>
+
+  <!-- Friendly API Reachability Alert Banner (Hidden by default) -->
+  <div id="apiUnreachableBanner" class="reachability-banner hidden">
+    <span>⚠️ <strong>API not reachable</strong>: Could not connect to backend at <code>http://localhost:8000</code>. Ensure Teammate B's API is running or switch to Sample Mode.</span>
+    <button id="retryApiBtn" class="preset-btn" style="padding: 2px 8px; font-size: 0.75rem;">Retry Connection</button>
+  </div>
+
+  <!-- Mandatory Assumptions Box (Always Visible) -->
+  <aside class="assumptions-banner" aria-label="Assumptions Notice">
+    <div class="assumptions-icon">ℹ️</div>
+    <div class="assumptions-text">
+      <h3>Operational Assumptions & Decision-Support Notice</h3>
+      <p>
+        Estimates only. Rated power x estimated idle time. Real draw assumed 60-100% of rated power. Tariff Rs 8/kWh and CO2 0.7 kg/kWh are ILLUSTRATIVE placeholders. All savings figures represent estimated avoidable lighting energy, never measured savings.
+      </p>
+    </div>
+  </aside>
+
+  <!-- Threshold Control Bar -->
+  <section class="controls-bar" aria-label="Threshold Controls">
+    <div class="threshold-control">
+      <div class="threshold-label">
+        <span class="threshold-title">Idle Inactivity Threshold</span>
+        <span class="threshold-desc">Duration of zero occupancy before lighting is flagged</span>
+      </div>
+      <div class="slider-wrapper">
+        <input 
+          type="range" 
+          id="thresholdSlider" 
+          min="5" 
+          max="60" 
+          step="1" 
+          value="15" 
+          aria-label="Threshold in minutes"
+        />
+        <div id="thresholdVal" class="threshold-value-pill">15 min</div>
+      </div>
+    </div>
+
+    <!-- Quick Presets -->
+    <div class="preset-buttons">
+      <button class="preset-btn" data-threshold="5">5m</button>
+      <button class="preset-btn" data-threshold="10">10m</button>
+      <button class="preset-btn active" data-threshold="15">15m (Default)</button>
+      <button class="preset-btn" data-threshold="30">30m</button>
+      <button class="preset-btn" data-threshold="60">60m</button>
+    </div>
+  </section>
+
+  <!-- Summary KPI Row -->
+  <section class="kpi-row" aria-label="Key Performance Indicators">
+    <div class="kpi-card">
+      <div class="kpi-title">Monitored Rooms</div>
+      <div id="kpiTotalRooms" class="kpi-value">--</div>
+      <div class="kpi-sub">Active in twin telemetry</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-title">Probable Waste Rooms</div>
+      <div id="kpiFlaggedRooms" class="kpi-value" style="color: #dc2626;">--</div>
+      <div class="kpi-sub">Exceeding idle threshold</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-title">Est. Avoidable Energy</div>
+      <div id="kpiTotalKwh" class="kpi-value">--</div>
+      <div class="kpi-sub">Estimated range (kWh)</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-title">Est. Avoidable Cost</div>
+      <div id="kpiTotalCost" class="kpi-value">--</div>
+      <div class="kpi-sub">Illustrative @ Rs 8/kWh</div>
+    </div>
+  </section>
+
+  <!-- Main Content Layout -->
+  <main class="dashboard-main">
+    
+    <!-- Left Column: Floor Grid + What-If Table -->
+    <div class="left-column">
+      
+      <!-- Floor Grid & 3D Digital Twin Section -->
+      <section class="section-card">
+        <div class="section-header">
+          <div class="section-title-wrap">
+            <h2 class="section-title">
+              <span>🏢</span> Room Occupancy Floor View
+            </h2>
+            <div class="view-toggle-group">
+              <button id="view2dBtn" class="view-toggle-btn active" title="Show 2D Card Grid">🏢 2D Cards</button>
+              <button id="view3dBtn" class="view-toggle-btn" title="Show Interactive 3D Digital Twin">🌐 3D Twin</button>
+            </div>
+          </div>
+          <span id="gridLastUpdated" class="section-meta">Auto-refreshing every 2s</span>
+        </div>
+
+        <!-- 2D Floor Grid -->
+        <div id="floorGrid" class="floor-grid">
+          <!-- Room cards populated dynamically by app.js -->
+        </div>
+
+        <!-- 3D Digital Twin Viewport Container -->
+        <div id="floor3dContainer" class="floor-3d-container" style="display: none;">
+          <div class="floor-3d-toolbar">
+            <span class="floor-3d-hint">🖱️ Left click + drag to rotate • Scroll to zoom • Click any room to inspect</span>
+            <div class="floor-3d-actions">
+              <button id="btnIsoView" class="floor-3d-action-btn">Isometric</button>
+              <button id="btnTopView" class="floor-3d-action-btn">Top-Down</button>
+              <button id="btnFocusWaste" class="floor-3d-action-btn highlight">Focus Waste</button>
+            </div>
+          </div>
+          <div id="threeCanvasWrapper" class="three-canvas-wrapper"></div>
+          <div class="floor-3d-legend">
+            <span class="legend-chip red"><span class="chip-dot"></span> Probable Waste</span>
+            <span class="legend-chip grey"><span class="chip-dot"></span> Needs Verification</span>
+            <span class="legend-chip blue"><span class="chip-dot"></span> Reserved</span>
+            <span class="legend-chip amber"><span class="chip-dot"></span> Watching</span>
+            <span class="legend-chip green"><span class="chip-dot"></span> Normal OK</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- What-If Policy Table Section -->
+      <section class="section-card">
+        <div class="section-header">
+          <h2 class="section-title">
+            <span>📊</span> Policy What-If Analysis
+          </h2>
+          <span class="section-meta">Comparative trade-offs at different idle thresholds</span>
+        </div>
+
+        <div class="whatif-table-container">
+          <table class="whatif-table">
+            <thead>
+              <tr>
+                <th>Threshold</th>
+                <th>Rooms Flagged</th>
+                <th>Est. Avoidable Energy</th>
+                <th>Est. Avoidable Cost</th>
+                <th>Est. Avoidable CO2</th>
+              </tr>
+            </thead>
+            <tbody id="whatifTableBody">
+              <!-- What-if rows populated dynamically by app.js -->
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+    </div>
+
+    <!-- Right Column: Evidence Panel & Recommendations List -->
+    <div class="right-column">
+      
+      <!-- Evidence Panel Section -->
+      <section id="evidencePanelSection" class="section-card evidence-panel">
+        <div class="evidence-panel-header">
+          <div>
+            <h2 id="evidenceRoomName" class="section-title">Select a Room</h2>
+            <div id="evidenceRoomId" class="section-meta">Click any card on the floor grid to inspect</div>
+          </div>
+          <span id="evidenceStatusPill" class="status-pill" style="display: none;">
+            <span class="status-dot"></span>
+            <span id="evidenceStatusText">--</span>
+          </span>
+        </div>
+
+        <div id="evidenceContentPlaceholder" class="empty-state">
+          <div class="empty-icon">🔍</div>
+          <div class="empty-text">Select any room card to inspect sensor evidence and energy estimates</div>
+        </div>
+
+        <div id="evidenceContent" style="display: none;">
+          <!-- Telemetry Stats Grid -->
+          <div class="evidence-grid">
+            <div class="evidence-stat">
+              <span class="evidence-stat-label">Detection Confidence</span>
+              <span id="evidenceConfidence" class="evidence-stat-val">--</span>
+            </div>
+            <div class="evidence-stat">
+              <span class="evidence-stat-label">Vacant Duration</span>
+              <span id="evidenceVacantMin" class="evidence-stat-val">--</span>
+            </div>
+            <div class="evidence-stat full-width">
+              <span class="evidence-stat-label">Est. Avoidable Energy</span>
+              <span id="evidenceKwhRange" class="evidence-stat-val highlight-waste">--</span>
+            </div>
+            <div class="evidence-stat">
+              <span class="evidence-stat-label">Est. Avoidable Cost</span>
+              <span id="evidenceCostInr" class="evidence-stat-val">--</span>
+            </div>
+            <div class="evidence-stat">
+              <span class="evidence-stat-label">Est. Avoidable CO2</span>
+              <span id="evidenceCo2Kg" class="evidence-stat-val">--</span>
+            </div>
+            <div class="evidence-stat full-width">
+              <span class="evidence-stat-label">Action Priority Score</span>
+              <span id="evidencePriority" class="evidence-stat-val">--</span>
+            </div>
+          </div>
+
+          <!-- Evidence List -->
+          <div class="evidence-bullets-section">
+            <h3 class="evidence-bullets-title">Observed Sensor Evidence</h3>
+            <ul id="evidenceList" class="evidence-bullets">
+              <!-- Evidence items populated dynamically -->
+            </ul>
+          </div>
+
+          <!-- Explain Action & Output -->
+          <div class="explain-action-container">
+            <button id="explainBtn" class="explain-btn">
+              <span id="explainBtnIcon">✨</span>
+              <span id="explainBtnText">Explain with GenAI</span>
+            </button>
+
+            <div id="explainOutput" class="explain-output" style="display: none;">
+              <div class="explain-output-header">
+                <span>Facility Manager Explanation</span>
+                <span id="explainSourceBadge" class="source-badge source-template">Template</span>
+              </div>
+              <p id="explainTextContent">--</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Ranked Recommendations Section -->
+      <section class="section-card">
+        <div class="section-header">
+          <h2 class="section-title">
+            <span>⚡</span> Ranked Recommendations
+          </h2>
+          <span class="section-meta">Probable waste rooms, highest priority first</span>
+        </div>
+
+        <div id="recommendationsList" class="recommendations-list">
+          <!-- Recommendations or empty state populated dynamically -->
+        </div>
+      </section>
+
+    </div>
+
+  </main>
+
+  <!-- App Footer -->
+  <footer class="app-footer">
+    <p>
+      Decision support only. Not measured savings. Not a BMS replacement. <span class="footer-privacy-note">No face recognition: only people counts are used.</span>
+    </p>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
