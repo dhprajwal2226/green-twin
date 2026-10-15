@@ -138,10 +138,9 @@ def get_queue(threshold: int = 15):
 @app.post("/ledger/action", summary="Record a response action in the evidence ledger")
 def post_ledger_action(act: ActionRequest):
     """
-    Thin wrapper: validates room_id against ROOMS, calls engine.record_action(),
-    and returns the updated ledger entry. Returns HTTP 400 if room is unknown or no open issue.
+    Thin wrapper: calls engine.record_action(room_id, action, ts).
+    Catches ValueError (unknown room or no open issue) and returns HTTP 400.
     """
-    require_valid_room(act.room_id)
     try:
         return engine.record_action(act.room_id, act.action, act.ts)
     except ValueError as e:

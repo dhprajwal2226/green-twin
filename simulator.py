@@ -254,20 +254,31 @@ if __name__ == "__main__":
     # 6. Verify POST /ledger/action with valid room (R204)
     action_entry = record_action("R204", "switched_off", "2026-10-15T12:30:00")
 
-    # 7. Verify POST /ledger/action with unknown room returns 400
+    # 7. Verify POST /ledger/action error paths (unknown room & no open issue) return HTTP 400
     try:
-        bad_resp = requests.post(
+        bad_unknown = requests.post(
             f"{API}/ledger/action",
             json={"room_id": "R999", "action": "test", "ts": "2026-10-15T12:00:00"},
             timeout=5
         )
-        if bad_resp.status_code == 400:
-            print("[OK] Unknown room_id 'R999' returned HTTP 400 as expected.")
+        if bad_unknown.status_code == 400:
+            print(f"[OK] Unknown room 'R999' returned HTTP 400: {bad_unknown.json().get('detail')}")
         else:
-            print(f"[FAIL] Expected HTTP 400 for unknown room, got {bad_resp.status_code}")
+            print(f"[FAIL] Expected HTTP 400 for unknown room, got {bad_unknown.status_code}")
+            all_ok = False
+
+        bad_no_issue = requests.post(
+            f"{API}/ledger/action",
+            json={"room_id": "R206", "action": "test", "ts": "2026-10-15T14:35:00"},
+            timeout=5
+        )
+        if bad_no_issue.status_code == 400:
+            print(f"[OK] Room with no open issue 'R206' returned HTTP 400: {bad_no_issue.json().get('detail')}")
+        else:
+            print(f"[FAIL] Expected HTTP 400 for room with no open issue, got {bad_no_issue.status_code}")
             all_ok = False
     except Exception as e:
-        print(f"[FAIL] Error testing unknown room: {e}")
+        print(f"[FAIL] Error testing action error paths: {e}")
         all_ok = False
 
     # 8. Verify /ledger shows entries with status and evidence_missing
