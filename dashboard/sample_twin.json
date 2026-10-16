@@ -60,21 +60,5 @@
     "cost_inr": 0.0,
     "co2_kg": 0.0,
     "priority": 0.012
-  },
-  {
-    "room_id": "R208",
-    "name": "Office 208",
-    "status": "ok",
-    "vacant_min": 0,
-    "confidence": 0.98,
-    "evidence": [
-      "2 persons detected",
-      "natural lighting harvesting active"
-    ],
-    "kwh_low": 0.0,
-    "kwh_high": 0.0,
-    "cost_inr": 0.0,
-    "co2_kg": 0.0,
-    "priority": 0.0
   }
 ]
