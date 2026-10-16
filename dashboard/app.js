@@ -108,6 +108,7 @@ const state = {
   pollTimer: null,
   isExplaining: false,
   viewMode: "2d", // "2d" or "3d"
+  explanations: {}, // Room-level GenAI explanation cache (room_id -> {text, source})
 };
 
 // ============================================================================
@@ -599,11 +600,32 @@ function populateEvidencePanel(roomId) {
     });
   }
 
-  // Reset or preserve explanation state
-  dom.explainBtn.disabled = false;
-  dom.explainBtnText.textContent = "Explain with GenAI";
-  dom.explainBtnIcon.textContent = "✨";
-  dom.explainOutput.style.display = "none";
+  // Preserve or reset explanation state based on whether an explanation exists for this room
+  if (state.isExplaining && state.selectedRoomId === roomId) {
+    dom.explainBtn.disabled = true;
+    dom.explainBtnText.textContent = "Analyzing with GenAI...";
+    dom.explainBtnIcon.innerHTML = `<span class="spinner"></span>`;
+    dom.explainOutput.style.display = "none";
+  } else if (state.explanations && state.explanations[roomId]) {
+    const cachedExplain = state.explanations[roomId];
+    dom.explainOutput.style.display = "block";
+    dom.explainTextContent.textContent = cachedExplain.text;
+    if (cachedExplain.source === "gemini") {
+      dom.explainSourceBadge.className = "source-badge source-gemini";
+      dom.explainSourceBadge.textContent = "Gemini AI";
+    } else {
+      dom.explainSourceBadge.className = "source-badge source-template";
+      dom.explainSourceBadge.textContent = "Rule Template";
+    }
+    dom.explainBtn.disabled = false;
+    dom.explainBtnText.textContent = "Re-explain with GenAI";
+    dom.explainBtnIcon.textContent = "✨";
+  } else {
+    dom.explainBtn.disabled = false;
+    dom.explainBtnText.textContent = "Explain with GenAI";
+    dom.explainBtnIcon.textContent = "✨";
+    dom.explainOutput.style.display = "none";
+  }
 }
 
 /**
@@ -760,11 +782,14 @@ async function handleExplainClick() {
       }
     }
 
-    // Display Explanation Result
-    dom.explainOutput.style.display = "block";
-    dom.explainTextContent.textContent = explanationData.explanation || "No explanation text provided.";
-
+    // Display and cache Explanation Result
+    const text = explanationData.explanation || "No explanation text provided.";
     const source = (explanationData.source || "template").toLowerCase();
+    state.explanations[roomId] = { text, source };
+
+    dom.explainOutput.style.display = "block";
+    dom.explainTextContent.textContent = text;
+
     if (source === "gemini") {
       dom.explainSourceBadge.className = "source-badge source-gemini";
       dom.explainSourceBadge.textContent = "Gemini AI";
@@ -776,6 +801,7 @@ async function handleExplainClick() {
   } catch (error) {
     console.warn("Explain request failed; rendering rule template fallback:", error);
     const fallback = generateLocalTemplateExplanation(room || { room_id: roomId });
+    state.explanations[roomId] = { text: fallback.explanation, source: "template" };
     dom.explainOutput.style.display = "block";
     dom.explainTextContent.textContent = fallback.explanation;
     dom.explainSourceBadge.className = "source-badge source-template";
