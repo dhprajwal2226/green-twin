@@ -13,7 +13,7 @@
 const USE_SAMPLE = false;
 
 // Backend API Base URL
-const API_BASE = "http://localhost:8000";
+const API_BASE = (window.location.port === "5500") ? "http://localhost:8000" : window.location.origin;
 
 // Polling interval in milliseconds (polling GET /twin every 2 seconds)
 const POLL_INTERVAL_MS = 2000;
