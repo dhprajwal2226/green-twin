@@ -578,6 +578,7 @@ body {
 }
 
 .legend-chip.red .chip-dot { background: #ef4444; box-shadow: 0 0 6px #ef4444; }
+.legend-chip.orange .chip-dot { background: #f97316; box-shadow: 0 0 6px #f97316; }
 .legend-chip.grey .chip-dot { background: #94a3b8; }
 .legend-chip.blue .chip-dot { background: #38bdf8; box-shadow: 0 0 6px #38bdf8; }
 .legend-chip.amber .chip-dot { background: #f59e0b; box-shadow: 0 0 6px #f59e0b; }

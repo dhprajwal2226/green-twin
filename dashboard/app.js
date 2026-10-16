@@ -67,19 +67,6 @@ const EMBEDDED_SAMPLE_ROOMS = [
     cost_inr: 0.0,
     co2_kg: 0.0,
     priority: 0.012
-  },
-  {
-    room_id: "R208",
-    name: "Office 208",
-    status: "ok",
-    vacant_min: 0,
-    confidence: 0.98,
-    evidence: ["2 persons detected", "scheduled occupancy active"],
-    kwh_low: 0.0,
-    kwh_high: 0.0,
-    cost_inr: 0.0,
-    co2_kg: 0.0,
-    priority: 0.0
   }
 ];
 
@@ -1139,476 +1126,33 @@ function escapeHtml(str) {
 }
 
 // ============================================================================
-// 3D DIGITAL TWIN MODULE (Three.js Architectural Floor Plan)
+// 3D DIGITAL TWIN MODULE (Delegates to twin3d.js)
 // ============================================================================
 
-const threeTwin = {
-  initialized: false,
-  scene: null,
-  camera: null,
-  renderer: null,
-  controls: null,
-  raycaster: null,
-  mouse: null,
-  roomObjects: {},      // roomId -> { group, floorMesh, light, diffuser, beacon, sprite, canvas, ctx, texture }
-  clickableMeshes: [],  // array of room hit meshes for raycasting
-  selectionBox: null,   // active selection box/ring
-  animFrameId: null,
-};
-
-const ROOM_3D_LAYOUT = {
-  R204: { x: -6.0, z: -4.5, w: 5.6, d: 5.0, h: 2.2, name: "Lab 204" },
-  R205: { x: 0.0,  z: -4.5, w: 5.6, d: 5.0, h: 2.2, name: "Class 205" },
-  R206: { x: 6.0,  z: -4.5, w: 5.6, d: 5.0, h: 2.2, name: "Hall 206" },
-  R207: { x: -3.5, z: 4.5,  w: 7.2, d: 5.0, h: 2.2, name: "Seminar 207" },
-  R208: { x: 4.5,  z: 4.5,  w: 7.2, d: 5.0, h: 2.2, name: "Office 208" },
-};
-
-const STATUS_3D_CONFIG = {
-  probable_waste:    { hex: 0xef4444, css: "#ef4444", intensity: 2.4, label: "PROBABLE WASTE" },
-  needs_verification:{ hex: 0x94a3b8, css: "#94a3b8", intensity: 0.8, label: "NEEDS VERIFY" },
-  reserved_vacant:   { hex: 0x38bdf8, css: "#38bdf8", intensity: 1.2, label: "RESERVED" },
-  reserved:          { hex: 0x38bdf8, css: "#38bdf8", intensity: 1.2, label: "RESERVED" },
-  watching:          { hex: 0xf59e0b, css: "#f59e0b", intensity: 1.4, label: "WATCHING" },
-  ok:                { hex: 0x22c55e, css: "#22c55e", intensity: 1.0, label: "NORMAL OK" },
-  unknown:           { hex: 0x64748b, css: "#64748b", intensity: 0.8, label: "MONITORED" },
-};
-
-function getStatus3dConfig(status) {
-  if (!status) return STATUS_3D_CONFIG.unknown;
-  const s = status.toLowerCase();
-  return STATUS_3D_CONFIG[s] || STATUS_3D_CONFIG.unknown;
-}
-
 function init3DScene() {
-  if (threeTwin.initialized) return;
-
-  if (typeof THREE === "undefined") {
-    if (dom.threeCanvasWrapper) {
-      dom.threeCanvasWrapper.innerHTML = `
-        <div class="empty-state" style="padding-top: 110px;">
-          <div class="empty-icon">🌐</div>
-          <div class="empty-text">3D WebGL library is loading or network is offline.</div>
-          <div style="font-size: 0.8rem; color: #94a3b8; margin-top: 0.5rem;">
-            You can continue using the 2D Cards view smoothly.
-          </div>
-        </div>
-      `;
-    }
-    return;
-  }
-
-  const wrapper = dom.threeCanvasWrapper;
-  if (!wrapper) return;
-
-  const width = wrapper.clientWidth || 600;
-  const height = wrapper.clientHeight || 380;
-
-  // 1. Scene
-  const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x090d16);
-  scene.fog = new THREE.FogExp2(0x090d16, 0.015);
-  threeTwin.scene = scene;
-
-  // 2. Camera
-  const camera = new THREE.PerspectiveCamera(40, width / height, 0.1, 1000);
-  camera.position.set(16, 18, 22);
-  threeTwin.camera = camera;
-
-  // 3. Renderer
-  const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
-  renderer.setSize(width, height);
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-  renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-  renderer.outputEncoding = THREE.sRGBEncoding;
-  wrapper.innerHTML = "";
-  wrapper.appendChild(renderer.domElement);
-  threeTwin.renderer = renderer;
-
-  // 4. Orbit Controls (if available from CDN)
-  if (typeof THREE.OrbitControls !== "undefined") {
-    const controls = new THREE.OrbitControls(camera, renderer.domElement);
-    controls.enableDamping = true;
-    controls.dampingFactor = 0.06;
-    controls.maxPolarAngle = Math.PI / 2 - 0.05;
-    controls.minDistance = 8;
-    controls.maxDistance = 50;
-    controls.target.set(0, 0, 0);
-    threeTwin.controls = controls;
-  }
-
-  // 5. Environmental Lighting
-  const ambientLight = new THREE.AmbientLight(0xffffff, 0.65);
-  scene.add(ambientLight);
-
-  const dirLight = new THREE.DirectionalLight(0xffffff, 0.55);
-  dirLight.position.set(20, 30, 15);
-  dirLight.castShadow = true;
-  dirLight.shadow.mapSize.width = 1024;
-  dirLight.shadow.mapSize.height = 1024;
-  scene.add(dirLight);
-
-  // 6. Base Building Floor Slab
-  buildArchitecturalBase(scene);
-
-  // 7. Rooms & Lighting Fixtures
-  buildRooms(scene);
-
-  // 8. Selection Box Indicator
-  const selGeo = new THREE.RingGeometry(1.6, 1.85, 32);
-  selGeo.rotateX(-Math.PI / 2);
-  const selMat = new THREE.MeshBasicMaterial({ color: 0x0f766e, side: THREE.DoubleSide });
-  const selectionMesh = new THREE.Mesh(selGeo, selMat);
-  selectionMesh.position.set(0, 0.04, 0);
-  selectionMesh.visible = false;
-  scene.add(selectionMesh);
-  threeTwin.selectionBox = selectionMesh;
-
-  // 9. Raycasting Setup
-  threeTwin.raycaster = new THREE.Raycaster();
-  threeTwin.mouse = new THREE.Vector2();
-
-  renderer.domElement.addEventListener("click", onThreeCanvasClick);
-  renderer.domElement.addEventListener("mousemove", onThreeCanvasMouseMove);
-  window.addEventListener("resize", onThreeWindowResize);
-
-  threeTwin.initialized = true;
-
-  // 10. Start Animation Loop
-  animate3DScene();
-
-  // Initial Sync
-  update3DDigitalTwin();
-  if (state.selectedRoomId) {
-    update3DSelection(state.selectedRoomId);
-  }
-}
-
-function buildArchitecturalBase(scene) {
-  // Main foundation slab
-  const slabGeo = new THREE.BoxGeometry(24, 0.4, 18);
-  const slabMat = new THREE.MeshStandardMaterial({
-    color: 0x111827,
-    roughness: 0.85,
-    metalness: 0.1,
-  });
-  const slab = new THREE.Mesh(slabGeo, slabMat);
-  slab.position.y = -0.2;
-  slab.receiveShadow = true;
-  scene.add(slab);
-
-  // Subtle floor grid helper
-  const grid = new THREE.GridHelper(24, 24, 0x1e293b, 0x1e293b);
-  grid.position.y = 0.02;
-  scene.add(grid);
-
-  // Central corridor accent path
-  const corridorGeo = new THREE.PlaneGeometry(22, 2.6);
-  corridorGeo.rotateX(-Math.PI / 2);
-  const corridorMat = new THREE.MeshStandardMaterial({
-    color: 0x1e293b,
-    roughness: 0.9,
-  });
-  const corridor = new THREE.Mesh(corridorGeo, corridorMat);
-  corridor.position.set(0, 0.025, 0);
-  scene.add(corridor);
-}
-
-function buildRooms(scene) {
-  threeTwin.roomObjects = {};
-  threeTwin.clickableMeshes = [];
-
-  const wallMat = new THREE.MeshStandardMaterial({
-    color: 0x334155,
-    transparent: true,
-    opacity: 0.55,
-    roughness: 0.4,
-    metalness: 0.2,
-  });
-
-  for (const [roomId, layout] of Object.entries(ROOM_3D_LAYOUT)) {
-    const group = new THREE.Group();
-    group.position.set(layout.x, 0, layout.z);
-    group.userData = { roomId };
-
-    // 1. Room Floor Tile
-    const floorGeo = new THREE.PlaneGeometry(layout.w, layout.d);
-    floorGeo.rotateX(-Math.PI / 2);
-    const floorMat = new THREE.MeshStandardMaterial({
-      color: 0x1e293b,
-      roughness: 0.7,
-      metalness: 0.15,
+  if (window.twin3d && typeof window.twin3d.init === "function") {
+    window.twin3d.init(dom.threeCanvasWrapper, (roomId) => {
+      selectRoom(roomId);
     });
-    const floorMesh = new THREE.Mesh(floorGeo, floorMat);
-    floorMesh.position.y = 0.03;
-    floorMesh.receiveShadow = true;
-    floorMesh.userData = { roomId };
-    group.add(floorMesh);
-    threeTwin.clickableMeshes.push(floorMesh);
-
-    // 2. Architectural Cutaway Walls
-    const w = layout.w;
-    const d = layout.d;
-    const h = layout.h;
-    const t = 0.12;
-
-    // Back wall
-    const backWall = new THREE.Mesh(new THREE.BoxGeometry(w, h, t), wallMat);
-    backWall.position.set(0, h / 2, -d / 2);
-    group.add(backWall);
-
-    // Left wall
-    const leftWall = new THREE.Mesh(new THREE.BoxGeometry(t, h, d), wallMat);
-    leftWall.position.set(-w / 2, h / 2, 0);
-    group.add(leftWall);
-
-    // Right wall
-    const rightWall = new THREE.Mesh(new THREE.BoxGeometry(t, h, d), wallMat);
-    rightWall.position.set(w / 2, h / 2, 0);
-    group.add(rightWall);
-
-    // Low front divider (cutaway so interior is visible)
-    const frontWall = new THREE.Mesh(new THREE.BoxGeometry(w * 0.4, 0.6, t), wallMat);
-    frontWall.position.set(-w * 0.28, 0.3, d / 2);
-    group.add(frontWall);
-
-    // 3. Hanging Pendant Lighting Fixture
-    const cordGeo = new THREE.CylinderGeometry(0.025, 0.025, 0.9, 8);
-    const cordMat = new THREE.MeshStandardMaterial({ color: 0x64748b, metalness: 0.8 });
-    const cord = new THREE.Mesh(cordGeo, cordMat);
-    cord.position.set(0, h - 0.45, 0);
-    group.add(cord);
-
-    const fixtureGeo = new THREE.BoxGeometry(1.6, 0.12, 0.45);
-    const fixtureMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.5, metalness: 0.7 });
-    const fixture = new THREE.Mesh(fixtureGeo, fixtureMat);
-    fixture.position.set(0, h - 0.9, 0);
-    group.add(fixture);
-
-    // Diffuser LED panel (colored glow)
-    const diffuserGeo = new THREE.BoxGeometry(1.5, 0.06, 0.38);
-    const diffuserMat = new THREE.MeshStandardMaterial({
-      color: 0xffffff,
-      emissive: 0xef4444,
-      emissiveIntensity: 1.5,
-      roughness: 0.2,
-    });
-    const diffuser = new THREE.Mesh(diffuserGeo, diffuserMat);
-    diffuser.position.set(0, h - 0.96, 0);
-    group.add(diffuser);
-
-    // PointLight casting light onto room
-    const pointLight = new THREE.PointLight(0xef4444, 1.8, 9, 2);
-    pointLight.position.set(0, h - 1.05, 0);
-    group.add(pointLight);
-
-    // 4. Waste Pulsing Beacon Ring
-    const beaconGeo = new THREE.TorusGeometry(1.1, 0.05, 8, 32);
-    beaconGeo.rotateX(Math.PI / 2);
-    const beaconMat = new THREE.MeshBasicMaterial({
-      color: 0xef4444,
-      transparent: true,
-      opacity: 0.85,
-    });
-    const beacon = new THREE.Mesh(beaconGeo, beaconMat);
-    beacon.position.set(0, 0.1, 0);
-    beacon.visible = false;
-    group.add(beacon);
-
-    // 5. Dynamic 3D Text Sprite Label
-    const spriteObj = createRoomCanvasSprite(layout.name, "MONITORED", "#64748b");
-    spriteObj.sprite.position.set(0, h + 1.2, 0);
-    group.add(spriteObj.sprite);
-
-    scene.add(group);
-
-    threeTwin.roomObjects[roomId] = {
-      group,
-      floorMesh,
-      light: pointLight,
-      diffuser,
-      beacon,
-      sprite: spriteObj.sprite,
-      canvas: spriteObj.canvas,
-      ctx: spriteObj.ctx,
-      texture: spriteObj.texture,
-      layout,
-    };
   }
-}
-
-function createRoomCanvasSprite(roomName, statusText, statusColorCss) {
-  const canvas = document.createElement("canvas");
-  canvas.width = 256;
-  canvas.height = 128;
-  const ctx = canvas.getContext("2d");
-
-  renderSpriteCanvas(ctx, canvas, roomName, statusText, statusColorCss);
-
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.minFilter = THREE.LinearFilter;
-  const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false });
-  const sprite = new THREE.Sprite(material);
-  sprite.scale.set(3.6, 1.8, 1);
-
-  return { sprite, canvas, ctx, texture };
-}
-
-function renderSpriteCanvas(ctx, canvas, roomName, statusText, statusColorCss) {
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-  // Background rounded rectangle
-  ctx.fillStyle = "rgba(11, 17, 32, 0.88)";
-  ctx.strokeStyle = statusColorCss;
-  ctx.lineWidth = 4;
-
-  const x = 8, y = 8, w = 240, h = 112, r = 16;
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.lineTo(x + w - r, y);
-  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
-  ctx.lineTo(x + w, y + h - r);
-  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
-  ctx.lineTo(x + r, y + h);
-  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
-  ctx.lineTo(x, y + r);
-  ctx.quadraticCurveTo(x, y, x + r, y);
-  ctx.closePath();
-  ctx.fill();
-  ctx.stroke();
-
-  // Room Name
-  ctx.fillStyle = "#ffffff";
-  ctx.font = "bold 26px -apple-system, sans-serif";
-  ctx.textAlign = "center";
-  ctx.fillText(roomName, 128, 48);
-
-  // Status Badge Text
-  ctx.fillStyle = statusColorCss;
-  ctx.font = "bold 18px -apple-system, sans-serif";
-  ctx.fillText(statusText, 128, 88);
 }
 
 function update3DDigitalTwin() {
-  if (!threeTwin.initialized) return;
-
-  const rooms = state.rooms || [];
-  rooms.forEach(room => {
-    const obj = threeTwin.roomObjects[room.room_id];
-    if (!obj) return;
-
-    const conf = getStatus3dConfig(room.status);
-
-    // 1. Update point light & diffuser emissive
-    obj.light.color.setHex(conf.hex);
-    obj.light.intensity = conf.intensity;
-    obj.diffuser.material.emissive.setHex(conf.hex);
-    obj.diffuser.material.emissiveIntensity = conf.intensity;
-
-    // 2. Floor tint
-    obj.floorMesh.material.color.setHex(conf.hex).lerp(new THREE.Color(0x111827), 0.7);
-
-    // 3. Waste beacon visibility & color
-    if (room.status === "probable_waste") {
-      obj.beacon.visible = true;
-      obj.beacon.material.color.setHex(conf.hex);
-    } else {
-      obj.beacon.visible = false;
-    }
-
-    // 4. Update floating Sprite text
-    const labelStatus = conf.label;
-    renderSpriteCanvas(obj.ctx, obj.canvas, room.name || obj.layout.name, labelStatus, conf.css);
-    obj.texture.needsUpdate = true;
-  });
-
-  // Ensure current selection stays in sync
-  if (state.selectedRoomId) {
-    update3DSelection(state.selectedRoomId);
+  if (window.twin3d && typeof window.twin3d.update === "function") {
+    window.twin3d.update(state.rooms || []);
   }
 }
 
 function update3DSelection(roomId) {
-  if (!threeTwin.initialized || !threeTwin.selectionBox) return;
-
-  const obj = threeTwin.roomObjects[roomId];
-  if (!obj) {
-    threeTwin.selectionBox.visible = false;
-    return;
+  if (window.twin3d && typeof window.twin3d.selectRoom === "function") {
+    window.twin3d.selectRoom(roomId, false);
   }
-
-  threeTwin.selectionBox.visible = true;
-  threeTwin.selectionBox.position.set(obj.layout.x, 0.05, obj.layout.z);
-}
-
-function onThreeCanvasClick(event) {
-  if (!threeTwin.renderer || !threeTwin.camera) return;
-
-  const rect = dom.threeCanvasWrapper.getBoundingClientRect();
-  const mouse = new THREE.Vector2(
-    ((event.clientX - rect.left) / rect.width) * 2 - 1,
-    -((event.clientY - rect.top) / rect.height) * 2 + 1
-  );
-
-  threeTwin.raycaster.setFromCamera(mouse, threeTwin.camera);
-  const intersects = threeTwin.raycaster.intersectObjects(threeTwin.clickableMeshes, true);
-
-  if (intersects.length > 0) {
-    const hitObj = intersects[0].object;
-    const hitRoomId = hitObj.userData ? hitObj.userData.roomId : null;
-    if (hitRoomId) {
-      selectRoom(hitRoomId);
-    }
-  }
-}
-
-function onThreeCanvasMouseMove(event) {
-  if (!threeTwin.renderer || !threeTwin.camera || !dom.threeCanvasWrapper) return;
-
-  const rect = dom.threeCanvasWrapper.getBoundingClientRect();
-  const mouse = new THREE.Vector2(
-    ((event.clientX - rect.left) / rect.width) * 2 - 1,
-    -((event.clientY - rect.top) / rect.height) * 2 + 1
-  );
-
-  threeTwin.raycaster.setFromCamera(mouse, threeTwin.camera);
-  const intersects = threeTwin.raycaster.intersectObjects(threeTwin.clickableMeshes, true);
-
-  if (intersects.length > 0) {
-    dom.threeCanvasWrapper.style.cursor = "pointer";
-  } else {
-    dom.threeCanvasWrapper.style.cursor = "grab";
-  }
-}
-
-function onThreeWindowResize() {
-  if (!threeTwin.renderer || !threeTwin.camera || !dom.threeCanvasWrapper) return;
-  const width = dom.threeCanvasWrapper.clientWidth;
-  const height = dom.threeCanvasWrapper.clientHeight || 380;
-  if (width === 0 || height === 0) return;
-
-  threeTwin.camera.aspect = width / height;
-  threeTwin.camera.updateProjectionMatrix();
-  threeTwin.renderer.setSize(width, height);
 }
 
 function set3DView(type) {
-  if (!threeTwin.camera || !threeTwin.controls) return;
-
-  if (type === "iso") {
-    threeTwin.camera.position.set(16, 18, 22);
-    threeTwin.controls.target.set(0, 0, 0);
-  } else if (type === "top") {
-    threeTwin.camera.position.set(0, 28, 0.01);
-    threeTwin.controls.target.set(0, 0, 0);
-  } else if (type === "waste") {
-    // Zoom toward Lab 204
-    threeTwin.camera.position.set(-6.0, 8.5, 6.0);
-    threeTwin.controls.target.set(-6.0, 1.0, -4.5);
-    selectRoom("R204");
+  if (window.twin3d && typeof window.twin3d.setView === "function") {
+    window.twin3d.setView(type);
   }
-  threeTwin.controls.update();
 }
 
 function switchViewMode(mode) {
@@ -1619,40 +1163,16 @@ function switchViewMode(mode) {
     dom.floorGrid.style.display = "none";
     dom.floor3dContainer.style.display = "flex";
 
-    if (!threeTwin.initialized) {
-      init3DScene();
-    } else {
-      setTimeout(onThreeWindowResize, 50);
-    }
+    init3DScene();
     update3DDigitalTwin();
+    if (state.selectedRoomId) {
+      update3DSelection(state.selectedRoomId);
+    }
   } else {
     dom.view3dBtn.classList.remove("active");
     dom.view2dBtn.classList.add("active");
     dom.floor3dContainer.style.display = "none";
     dom.floorGrid.style.display = "grid";
-  }
-}
-
-function animate3DScene() {
-  threeTwin.animFrameId = requestAnimationFrame(animate3DScene);
-
-  if (threeTwin.controls) {
-    threeTwin.controls.update();
-  }
-
-  // Animate waste pulsing beacons
-  const time = Date.now() * 0.003;
-  for (const rid in threeTwin.roomObjects) {
-    const obj = threeTwin.roomObjects[rid];
-    if (obj.beacon && obj.beacon.visible) {
-      const pulse = 1.0 + 0.15 * Math.sin(time * 3);
-      obj.beacon.scale.set(pulse, pulse, pulse);
-      obj.beacon.rotation.z += 0.015;
-    }
-  }
-
-  if (threeTwin.renderer && threeTwin.scene && threeTwin.camera) {
-    threeTwin.renderer.render(threeTwin.scene, threeTwin.camera);
   }
 }
 
