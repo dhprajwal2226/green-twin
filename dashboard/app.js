@@ -102,6 +102,8 @@ const state = {
   threshold: 15,
   rooms: [],
   recommendations: [],
+  queue: [],
+  ledger: [],
   whatifRows: [],
   selectedRoomId: null,
   isApiReachable: true,
@@ -168,8 +170,11 @@ const dom = {
   explainTextContent: document.getElementById("explainTextContent"),
   explainSourceBadge: document.getElementById("explainSourceBadge"),
 
-  // Recommendations & What-If
+  // Queue, Ledger & What-If
   recommendationsList: document.getElementById("recommendationsList"),
+  queueList: document.getElementById("recommendationsList"),
+  queueActionAlert: document.getElementById("queueActionAlert"),
+  ledgerList: document.getElementById("ledgerList"),
   whatifTableBody: document.getElementById("whatifTableBody"),
 };
 
@@ -183,6 +188,11 @@ const dom = {
  */
 function formatEnergyRange(room) {
   if (!room) return "0.000 kWh";
+
+  // Task D: needs_verification must show "No estimate: readings not trusted yet", never a kWh figure
+  if (room.status === "needs_verification") {
+    return "No estimate: readings not trusted yet";
+  }
 
   const low = room.kwh_low;
   const high = room.kwh_high;
@@ -232,6 +242,8 @@ function formatStatusLabel(status) {
   switch (status.toLowerCase()) {
     case "probable_waste":
       return "Probable Waste";
+    case "booking_unused":
+      return "Booking Unused";
     case "needs_verification":
       return "Needs Verification";
     case "reserved_vacant":
@@ -367,21 +379,25 @@ async function syncDashboardData() {
 
   // LIVE API MODE (Teammate B's backend at http://localhost:8000)
   try {
-    const [twinRes, recsRes, whatifRes] = await Promise.all([
+    const [twinRes, queueRes, whatifRes, ledgerRes] = await Promise.all([
       fetch(`${API_BASE}/twin?threshold=${currentThreshold}`),
-      fetch(`${API_BASE}/recommendations?threshold=${currentThreshold}`),
-      fetch(`${API_BASE}/whatif`)
+      fetch(`${API_BASE}/queue?threshold=${currentThreshold}`),
+      fetch(`${API_BASE}/whatif`),
+      fetch(`${API_BASE}/ledger`)
     ]);
 
     if (!twinRes.ok) throw new Error(`GET /twin failed: ${twinRes.statusText}`);
 
     const twinData = await twinRes.json();
-    const recsData = recsRes.ok ? await recsRes.json() : [];
+    const queueData = queueRes.ok ? await queueRes.json() : [];
     const whatifData = whatifRes.ok ? await whatifRes.json() : EMBEDDED_SAMPLE_WHATIF;
+    const ledgerData = ledgerRes.ok ? await ledgerRes.json() : [];
 
     state.rooms = Array.isArray(twinData) ? twinData : [];
-    state.recommendations = Array.isArray(recsData) ? recsData : [];
+    state.queue = Array.isArray(queueData) ? queueData : [];
+    state.recommendations = state.queue; // for backwards compatibility
     state.whatifRows = Array.isArray(whatifData) ? whatifData : EMBEDDED_SAMPLE_WHATIF;
+    state.ledger = Array.isArray(ledgerData) ? ledgerData : [];
 
     state.isApiReachable = true;
     setConnectionState("connected", "Live Twin Connected (localhost:8000)");
@@ -399,6 +415,8 @@ async function syncDashboardData() {
     if (!state.rooms || state.rooms.length === 0) {
       state.rooms = adjustSampleDataForThreshold(EMBEDDED_SAMPLE_ROOMS, currentThreshold);
       state.recommendations = state.rooms.filter(r => r.status === "probable_waste");
+      state.queue = [];
+      state.ledger = [];
       state.whatifRows = EMBEDDED_SAMPLE_WHATIF;
       renderDashboard();
     }
@@ -412,7 +430,8 @@ async function syncDashboardData() {
 function renderDashboard() {
   updateKpis();
   renderFloorGrid();
-  renderRecommendations();
+  renderQueue();
+  renderLedger();
   renderWhatIfTable();
   updateEvidencePanelIfSelected();
   update3DDigitalTwin();
@@ -423,10 +442,11 @@ function renderDashboard() {
 
 /**
  * Updates top KPI summary metrics.
+ * Counts both probable_waste AND booking_unused as flagged issues (Task D).
  */
 function updateKpis() {
   const rooms = state.rooms || [];
-  const flagged = rooms.filter(r => r.status === "probable_waste");
+  const flagged = rooms.filter(r => r.status === "probable_waste" || r.status === "booking_unused");
 
   dom.kpiTotalRooms.textContent = rooms.length;
   dom.kpiFlaggedRooms.textContent = flagged.length;
@@ -641,20 +661,104 @@ function updateEvidencePanelIfSelected() {
 }
 
 /**
- * Renders the ranked recommendations list (GET /recommendations).
- * Empty state: "No probable waste right now".
+ * Computes an appropriate action timestamp for a room.
+ * If a ledger entry exists with detected_ts, adds 5 minutes so it is strictly
+ * after detected_ts (e.g. 12:25:00 -> 12:30:00) and harmonizes with both
+ * scripted dates (2026-10-15) and live webcam runs.
  */
-function renderRecommendations() {
-  const container = dom.recommendationsList;
-  const recs = state.recommendations || [];
+function getActionTimestamp(roomId) {
+  const ledgerItem = (state.ledger || []).find(e => e.room_id === roomId);
+  if (ledgerItem && ledgerItem.detected_ts) {
+    const d = new Date(ledgerItem.detected_ts);
+    if (!isNaN(d.getTime())) {
+      const actionDate = new Date(d.getTime() + 5 * 60 * 1000);
+      return actionDate.toISOString().split(".")[0];
+    }
+  }
+  return new Date().toISOString().split(".")[0];
+}
 
-  if (recs.length === 0) {
+/**
+ * Handles the "Record action: switched off" button click (Task E).
+ * Sends POST /ledger/action with { room_id, action: "switched_off", ts }.
+ * Displays HTTP 400 detail message on error, refreshes panels on success.
+ */
+async function handleRecordAction(roomId, btnElement) {
+  if (!roomId) return;
+  const ts = getActionTimestamp(roomId);
+
+  if (btnElement) {
+    btnElement.disabled = true;
+    btnElement.textContent = "Recording...";
+  }
+
+  try {
+    const res = await fetch(`${API_BASE}/ledger/action`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        room_id: roomId,
+        action: "switched_off",
+        ts: ts,
+      }),
+    });
+
+    const data = await res.json();
+
+    if (!res.ok) {
+      const errorMsg = data && data.detail ? data.detail : `Error ${res.status}: Failed to record action`;
+      showQueueAlert(errorMsg, "error");
+      if (btnElement) {
+        btnElement.disabled = false;
+        btnElement.textContent = "Record action: switched off";
+      }
+      return;
+    }
+
+    showQueueAlert(`Action recorded for ${roomId} ('switched_off' at ${ts})`, "success");
+    // Refresh live data immediately
+    await syncData();
+
+  } catch (err) {
+    console.error("Failed to record action:", err);
+    showQueueAlert(`Network error: ${err.message}`, "error");
+    if (btnElement) {
+      btnElement.disabled = false;
+      btnElement.textContent = "Record action: switched off";
+    }
+  }
+}
+
+function showQueueAlert(msg, type) {
+  if (!dom.queueActionAlert) return;
+  dom.queueActionAlert.textContent = msg;
+  dom.queueActionAlert.className = `queue-action-alert ${type}`;
+  dom.queueActionAlert.style.display = "block";
+  setTimeout(() => {
+    if (dom.queueActionAlert) {
+      dom.queueActionAlert.style.display = "none";
+    }
+  }, 6000);
+}
+
+/**
+ * Renders the ranked issue queue (GET /queue?threshold=N).
+ * Task B: Shows rank, action, score, why list, effort, and evidence_status badge.
+ * For needs_verification rows, shows "no claim made", never a kWh figure.
+ * Task E: Provides "Record action: switched off" button per actionable issue.
+ */
+function renderQueue() {
+  const container = dom.queueList;
+  if (!container) return;
+  const items = state.queue || [];
+
+  if (items.length === 0) {
     container.innerHTML = `
       <div class="empty-state">
         <div class="empty-icon">✅</div>
-        <div class="empty-text">No probable waste right now</div>
+        <div class="empty-text">No open issues in queue</div>
         <div style="font-size: 0.775rem; color: var(--text-muted); margin-top: 0.25rem;">
-          All rooms are operating within normal occupancy thresholds.
+          All rooms are operating within normal occupancy thresholds or have been addressed.
         </div>
       </div>
     `;
@@ -663,37 +767,203 @@ function renderRecommendations() {
 
   container.innerHTML = "";
 
-  recs.forEach((rec, idx) => {
-    const item = document.createElement("div");
-    item.className = "recommendation-item";
-    item.setAttribute("role", "button");
-    item.setAttribute("tabindex", "0");
-    item.setAttribute("aria-label", `Recommendation ${idx + 1}: ${rec.name || rec.room_id}`);
+  items.forEach(item => {
+    const el = document.createElement("div");
+    const statusClass = item.status ? item.status.toLowerCase() : "unknown";
+    el.className = `queue-item ${statusClass}`;
 
-    item.addEventListener("click", () => selectRoom(rec.room_id));
-    item.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" || e.key === " ") {
-        e.preventDefault();
-        selectRoom(rec.room_id);
+    // Evidence status badge: estimated, observed, unverified
+    const evStatus = (item.evidence_status || "estimated").toLowerCase();
+    const evBadgeHtml = `<span class="badge-evidence ${escapeHtml(evStatus)}">${escapeHtml(evStatus)}</span>`;
+
+    // Effort badge
+    const effortStr = item.effort ? `Effort: ${item.effort}` : "Effort: low";
+
+    // Energy claim or no claim made
+    let energyClaimHtml = "";
+    if (item.status === "needs_verification") {
+      energyClaimHtml = `<span class="rec-claim">no claim made</span>`;
+    } else if (item.est_kwh_low !== undefined && item.est_kwh_high !== undefined) {
+      energyClaimHtml = `<span>Est. Avoidable: ${Number(item.est_kwh_low).toFixed(3)} - ${Number(item.est_kwh_high).toFixed(3)} kWh</span>`;
+    }
+
+    // Check if an action is already taken for this room in the ledger
+    const matchingLedger = (state.ledger || []).find(e => e.room_id === item.room_id);
+    const actionAlreadyTaken = matchingLedger && (matchingLedger.status === "action_taken" || matchingLedger.status === "response_observed");
+
+    let actionBtnHtml = "";
+    if (item.status !== "needs_verification") {
+      if (actionAlreadyTaken) {
+        actionBtnHtml = `<button class="btn-record-action action-taken" disabled>✓ Action Recorded</button>`;
+      } else {
+        actionBtnHtml = `<button class="btn-record-action" data-room-id="${escapeHtml(item.room_id)}">Record action: switched off</button>`;
       }
-    });
+    }
 
-    const priorityStr = rec.priority !== undefined ? `Priority: ${Number(rec.priority).toFixed(3)}` : "High Priority";
-    const costStr = formatCost(rec.cost_inr);
-    const kwhStr = formatEnergyRange(rec);
+    // Why list
+    const whyListHtml = Array.isArray(item.why) && item.why.length > 0
+      ? `<ul class="queue-why-list">${item.why.map(w => `<li>● ${escapeHtml(String(w))}</li>`).join("")}</ul>`
+      : "";
 
-    item.innerHTML = `
-      <div class="rec-left">
-        <span class="rec-title">#${idx + 1} ${escapeHtml(rec.name || rec.room_id)}</span>
-        <span class="rec-subtitle">${escapeHtml(rec.vacant_min !== undefined ? `${rec.vacant_min}m idle` : "Unoccupied")} • ${escapeHtml(kwhStr)}</span>
+    el.innerHTML = `
+      <div class="queue-item-header">
+        <div class="queue-rank-wrap">
+          <span class="queue-rank-badge">#${escapeHtml(String(item.rank || ""))}</span>
+          <span class="queue-room-title">${escapeHtml(item.name || item.room_id)}</span>
+        </div>
+        <div class="queue-badges-wrap">
+          ${evBadgeHtml}
+          <span class="status-pill ${getStatusCssClass(item.status)}">
+            <span class="status-dot"></span>
+            <span>${escapeHtml(formatStatusLabel(item.status))}</span>
+          </span>
+        </div>
       </div>
-      <div class="rec-right">
-        <span class="rec-priority">${escapeHtml(priorityStr)}</span>
-        <span class="rec-cost">${escapeHtml(costStr)}</span>
+
+      <div class="queue-action-text">${escapeHtml(item.action || "No action specified")}</div>
+
+      ${whyListHtml}
+
+      <div class="queue-item-footer">
+        <div class="queue-meta-text">
+          <span>Score: ${item.score !== undefined ? Number(item.score).toFixed(3) : "0.000"}</span>
+          <span>•</span>
+          <span>${escapeHtml(effortStr)}</span>
+          ${energyClaimHtml ? `<span>•</span> ${energyClaimHtml}` : ""}
+        </div>
+        <div>
+          ${actionBtnHtml}
+        </div>
       </div>
     `;
 
-    container.appendChild(item);
+    // Click on item selects room in evidence panel
+    el.addEventListener("click", (e) => {
+      if (e.target.closest(".btn-record-action")) return;
+      selectRoom(item.room_id);
+    });
+
+    // Wire action button
+    const btn = el.querySelector(".btn-record-action:not([disabled])");
+    if (btn) {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        handleRecordAction(item.room_id, btn);
+      });
+    }
+
+    container.appendChild(el);
+  });
+}
+
+/**
+ * Backward compatibility alias for renderQueue.
+ */
+function renderRecommendations() {
+  renderQueue();
+}
+
+/**
+ * Renders the Evidence Ledger (GET /ledger).
+ * Task C: Per entry shows id, room, issue, status progression, evidence_status,
+ * est_kwh range, text "Savings not verified (no meter)" when savings_verified is false,
+ * and clearly visible evidence_missing[] list.
+ */
+function renderLedger() {
+  const container = dom.ledgerList;
+  if (!container) return;
+  const entries = state.ledger || [];
+
+  if (entries.length === 0) {
+    container.innerHTML = `
+      <div class="empty-state">
+        <div class="empty-icon">📂</div>
+        <div class="empty-text">Ledger is clean</div>
+        <div style="font-size: 0.775rem; color: var(--text-muted); margin-top: 0.25rem;">
+          No active issue lifecycle entries recorded yet.
+        </div>
+      </div>
+    `;
+    return;
+  }
+
+  container.innerHTML = "";
+
+  entries.forEach(entry => {
+    const el = document.createElement("div");
+    el.className = "ledger-item";
+
+    const evStatus = (entry.evidence_status || "estimated").toLowerCase();
+    const evBadgeHtml = `<span class="badge-evidence ${escapeHtml(evStatus)}">${escapeHtml(evStatus)}</span>`;
+
+    const statusPillHtml = `<span class="ledger-status-pill status-${escapeHtml(entry.status || "detected")}">${escapeHtml(entry.status || "detected")}</span>`;
+
+    // Energy range
+    const kwhRangeStr = (entry.est_kwh_low !== undefined && entry.est_kwh_high !== undefined)
+      ? `${Number(entry.est_kwh_low).toFixed(3)} to ${Number(entry.est_kwh_high).toFixed(3)} kWh`
+      : "0.000 kWh";
+
+    // Unverified savings tag: ALWAYS when savings_verified is false
+    const unverifiedHtml = (entry.savings_verified === false)
+      ? `<div class="ledger-unverified-tag">⚠️ Savings not verified (no meter)</div>`
+      : "";
+
+    // Action & response info if present
+    const actionInfo = entry.action
+      ? `<div style="margin-top: 0.25rem; font-size: 0.775rem;"><strong>Action taken:</strong> ${escapeHtml(entry.action)} <span style="color: var(--text-muted);">(${escapeHtml(entry.action_ts || "")})</span></div>`
+      : "";
+
+    const responseInfo = entry.response
+      ? `<div style="margin-top: 0.2rem; font-size: 0.775rem; color: #166534;"><strong>Observed response:</strong> ${escapeHtml(entry.response)} <span style="color: var(--text-muted);">(${escapeHtml(entry.response_ts || "")})</span></div>`
+      : "";
+
+    // Missing evidence list (project credibility)
+    const missingArr = Array.isArray(entry.evidence_missing) ? entry.evidence_missing : [];
+    const missingListHtml = missingArr.length > 0
+      ? `
+        <div class="ledger-missing-section">
+          <strong>Evidence Missing & Assumptions:</strong>
+          <ul class="ledger-missing-list">
+            ${missingArr.map(m => `<li>⚠️ ${escapeHtml(String(m))}</li>`).join("")}
+          </ul>
+        </div>
+      `
+      : "";
+
+    el.innerHTML = `
+      <div class="ledger-item-header">
+        <div class="ledger-header-left">
+          <span class="ledger-id-tag">${escapeHtml(entry.id || "L?")}</span>
+          <span class="ledger-room-title">${escapeHtml(entry.name || entry.room_id)} (${escapeHtml(entry.room_id)})</span>
+        </div>
+        <div class="ledger-badges">
+          ${evBadgeHtml}
+          ${statusPillHtml}
+        </div>
+      </div>
+
+      <div class="ledger-progression">
+        Issue: <strong>${escapeHtml(formatStatusLabel(entry.issue))}</strong> • Lifecycle: 
+        <span style="${entry.status === 'detected' ? 'font-weight:700; color: #92400e;' : ''}">detected</span> ➔ 
+        <span style="${entry.status === 'recommended' ? 'font-weight:700; color: #9a3412;' : ''}">recommended</span> ➔ 
+        <span style="${entry.status === 'action_taken' ? 'font-weight:700; color: #1e40af;' : ''}">action_taken</span> ➔ 
+        <span style="${entry.status === 'response_observed' ? 'font-weight:700; color: #166534;' : ''}">response_observed</span>
+      </div>
+
+      <div class="ledger-details-grid">
+        <div><span style="color:var(--text-muted);">Est. Avoidable:</span> <strong>${escapeHtml(kwhRangeStr)}</strong></div>
+        <div><span style="color:var(--text-muted);">Detected at:</span> ${escapeHtml(entry.detected_ts || "N/A")}</div>
+      </div>
+
+      ${actionInfo}
+      ${responseInfo}
+
+      ${unverifiedHtml}
+
+      ${missingListHtml}
+    `;
+
+    container.appendChild(el);
   });
 }
 

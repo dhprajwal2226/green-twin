@@ -256,17 +256,33 @@
         </div>
       </section>
 
-      <!-- Ranked Recommendations Section -->
+      <!-- Ranked Issue Queue Section -->
       <section class="section-card">
         <div class="section-header">
           <h2 class="section-title">
-            <span>⚡</span> Ranked Recommendations
+            <span>⚡</span> Ranked Issue Queue
           </h2>
-          <span class="section-meta">Probable waste rooms, highest priority first</span>
+          <span class="section-meta">Fix-first priority queue ordered by impact & effort</span>
         </div>
 
-        <div id="recommendationsList" class="recommendations-list">
-          <!-- Recommendations or empty state populated dynamically -->
+        <div id="queueActionAlert" class="queue-action-alert" style="display: none;"></div>
+
+        <div id="recommendationsList" class="queue-list">
+          <!-- Queue items or empty state populated dynamically -->
+        </div>
+      </section>
+
+      <!-- Evidence Ledger Section -->
+      <section class="section-card ledger-section">
+        <div class="section-header">
+          <h2 class="section-title">
+            <span>📑</span> Evidence Ledger
+          </h2>
+          <span class="section-meta">Audit trail of actions & observed response evidence</span>
+        </div>
+
+        <div id="ledgerList" class="ledger-list">
+          <!-- Ledger entries populated dynamically -->
         </div>
       </section>
 
