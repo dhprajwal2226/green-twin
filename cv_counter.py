@@ -53,8 +53,8 @@ def parse_args():
     )
     parser.add_argument(
         "--room",
-        required=True,
-        help="Room ID to tag observations with, e.g. R204"
+        default="R204",
+        help="Room ID to tag observations with (default: R204)"
     )
     parser.add_argument(
         "--source",
