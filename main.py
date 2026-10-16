@@ -2,11 +2,13 @@
 # FastAPI server for the Green Building Digital Twin (api-cv branch)
 # Teammate B's file — DO NOT edit engine.py, only call it as thin wrappers.
 
+import os  # ADDED: needed to locate the dashboard folder
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles  # ADDED: serves the dashboard
 from pydantic import BaseModel
 import engine  # our team-lead's module
-from explain import router as explain_router  # ADDED: GenAI explanation endpoint
+from explain import router as explain_router  # GenAI explanation endpoint
 
 # -----------------------------------------------------------------------
 # App setup
@@ -26,7 +28,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(explain_router)  # ADDED: registers GET /explain/{room_id}
+app.include_router(explain_router)  # registers GET /explain/{room_id}
 
 
 # -----------------------------------------------------------------------
@@ -177,3 +179,13 @@ def post_reset():
         "rooms_cleared": list(engine.ROOMS.keys()),
         "ledger_cleared": True,
     }
+
+
+# -----------------------------------------------------------------------
+# ADDED: serve the dashboard at "/" so one deployed link shows everything.
+# This MUST stay at the very end so the API routes above take priority.
+# -----------------------------------------------------------------------
+
+_DASHBOARD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dashboard")
+if os.path.isdir(_DASHBOARD_DIR):
+    app.mount("/", StaticFiles(directory=_DASHBOARD_DIR, html=True), name="dashboard")
