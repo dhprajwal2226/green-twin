@@ -50,8 +50,11 @@ a real webcam during the event, so the demo uses simulated scenarios.
 
 ## Limitations
 - Data in the demo is simulated; there is no real campus data and no sub-meter.
-- The priority queue and ledger are served by the API (/queue, /ledger); the dashboard
-  integration of those panels is incomplete.
+- The dashboard shows the ranked queue, the evidence ledger and a "Record action" button,
+  all served by the API (/queue, /ledger, /ledger/action). Savings are never marked
+  verified without a meter.
+- The engine keeps data in memory only, so restarting the server clears all readings
+  and ledger entries.
 - Estimates are tiny per incident; real impact needs a pilot with a sub-meter to compare.
 
 ## Pilot plan
