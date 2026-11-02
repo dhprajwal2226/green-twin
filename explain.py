@@ -126,7 +126,7 @@ def build_template_explanation(room: Dict[str, Any]) -> str:
     if status == "probable_waste":
         vacant_desc = f"unoccupied for approximately {vacant_min} minutes" if vacant_min is not None else "unoccupied"
         sentence_1 = f"In {name} ({room_id}), lighting appears active while the space has been {vacant_desc}, supported by observed evidence: {evidence_str}."
-        sentence_2 = f"The digital twin calculates a detection confidence of {conf_str} from real-time occupancy sensor feeds."
+        sentence_2 = f"The digital twin reports a detection confidence of {conf_str} for the occupancy readings it received."
         sentence_3 = f"The estimated avoidable energy is {est_str}, calculated under rated power and idle-time assumptions rather than direct meter measurements."
         sentence_4 = "Facility managers are advised to verify the room on site and switch off idle fixtures or reconfigure schedules."
         return f"{sentence_1} {sentence_2} {sentence_3} {sentence_4}"
