@@ -704,7 +704,7 @@ async function handleRecordAction(roomId, btnElement) {
 
     showQueueAlert(`Action recorded for ${roomId} ('switched_off' at ${ts})`, "success");
     // Refresh live data immediately
-    await syncData();
+    await syncDashboardData();
 
   } catch (err) {
     console.error("Failed to record action:", err);
